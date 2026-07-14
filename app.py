@@ -190,28 +190,44 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-    # Interactive Subplots (Candlestick + RSI)
-    st.subheader("📈 High-Fidelity Signal Mapping Grid")
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.7, 0.3])
+   # ==============================================================================
+    # 📈 ADVANCED REAL-TIME TRADINGVIEW GRAPH GRID
+    # ==============================================================================
+    st.subheader("📈 High-Fidelity Real-Time Signal Mapping Grid")
     
-    fig.add_trace(go.Candlestick(
-        x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-        name="Asset Price", legendgroup="price"
-    ), row=1, col=1)
+    # Define the official TradingView Widget JavaScript configuration
+    # This renders a fully reactive, dark-themed pro charting terminal
+    tradingview_widget_html = f"""
+    <div class="tradingview-widget-container" style="height:100%;width:100%;">
+      <div id="tradingview_quant_chart" style="height:550px;width:100%;"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+      <script type="text/javascript">
+      new TradingView.widget({{
+        "width": "100%",
+        "height": 550,
+        "symbol": "NASDAQ:{symbol}",
+        "interval": "D",
+        "timezone": "Etc/UTC",
+        "theme": "dark",
+        "style": "1",
+        "locale": "en",
+        "toolbar_bg": "#070a12",
+        "enable_publishing": false,
+        "hide_side_toolbar": false,
+        "allow_symbol_change": true,
+        "container_id": "tradingview_quant_chart",
+        "studies": [
+          "EMA@tv-basicstudies",
+          "RSI@tv-basicstudies"
+        ]
+      }});
+      </script>
+    </div>
+    """
     
-    fig.add_trace(go.Scatter(x=df.index, y=df['EMA20'], name="EMA 20", line=dict(color='#00ff66', width=1.5), legendgroup="price"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['EMA50'], name="EMA 50", line=dict(color='#ff3366', width=1.5), legendgroup="price"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name="RSI (14)", line=dict(color='#58a6ff', width=1.5), legendgroup="rsi"), row=2, col=1)
-    
-    fig.add_hline(y=70, line_dash="dash", line_color="#ff3366", line_width=1, row=2, col=1)
-    fig.add_hline(y=30, line_dash="dash", line_color="#00ff66", line_width=1, row=2, col=1)
-    
-    fig.update_layout(
-        template="plotly_dark", paper_bgcolor="#0b0f19", plot_bgcolor="#070a12",
-        xaxis_rangeslider_visible=False, height=550, margin=dict(t=20, b=20, l=20, r=20),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    # Inject the HTML component securely into the main Streamlit canvas
+    import streamlit.components.v1 as components
+    components.html(tradingview_widget_html, height=560, scrolling=False)
 
     # Operations Tabs
     tab1, tab2 = st.tabs(["⚙️ Algorithmic Strategy Backtest", "🧠 Advanced AI Narrative Broker"])
