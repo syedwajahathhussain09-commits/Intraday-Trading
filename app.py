@@ -190,13 +190,25 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
-   # ==============================================================================
-    # 📈 ADVANCED REAL-TIME TRADINGVIEW GRAPH GRID
+   # Row 1: Real-Time Metric Indicators
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Asset Spot Price", f"${current_price:.2f}", f"{price_change:+.2f}%")
+    m2.metric("RSI (14-Period)", f"{current_rsi:.1f}", "Overbought > 70" if current_rsi > 70 else "Oversold < 30" if current_rsi < 30 else "Neutral")
+    m3.metric("EMA (20 vs 50)", f"${current_ema20:.2f}", f"Spread: ${(current_ema20 - current_ema50):.2f}")
+    
+    with m4:
+        st.markdown(f"""
+            <div style="background: linear-gradient(135deg, #0f172a, #070a12); border: 1px solid #1e293b; border-radius: 8px; padding: 15px; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.5);">
+                <div style="color: #8b949e; font-size: 14px; font-weight: 600; font-family: 'Courier New', monospace;">ALGO DIRECTIONAL SIGNAL</div>
+                <div style="color: {signal_color}; font-size: 18px; font-weight: bold; margin-top: 8px; font-family: 'Courier New', monospace;">{action_signal}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # ==============================================================================
+    # 📈 PASTED TRADINGVIEW GRAPH GRID (WITH TIMEFRAME TOOLBAR)
     # ==============================================================================
     st.subheader("📈 High-Fidelity Real-Time Signal Mapping Grid")
     
-    # Define the official TradingView Widget JavaScript configuration
-    # This renders a fully reactive, dark-themed pro charting terminal
     tradingview_widget_html = f"""
     <div class="tradingview-widget-container" style="height:100%;width:100%;">
       <div id="tradingview_quant_chart" style="height:550px;width:100%;"></div>
@@ -213,18 +225,27 @@ else:
         "locale": "en",
         "toolbar_bg": "#070a12",
         "enable_publishing": false,
-        "hide_side_toolbar": false,
-        "allow_symbol_change": true,
+        "hide_top_toolbar": false,          
+        "hide_side_toolbar": false,         
+        "allow_symbol_change": true,        
+        "save_image": true,
         "container_id": "tradingview_quant_chart",
         "studies": [
           "EMA@tv-basicstudies",
           "RSI@tv-basicstudies"
+        ],
+        "time_frames": [                    
+          {{ "text": "1d", "resolution": "5" }},
+          {{ "text": "5d", "resolution": "30" }},
+          {{ "text": "1m", "resolution": "60" }},
+          {{ "text": "3m", "resolution": "D" }},
+          {{ "text": "1y", "resolution": "W" }}
         ]
       }});
       </script>
     </div>
     """
-    
+        
     # Inject the HTML component securely into the main Streamlit canvas
     import streamlit.components.v1 as components
     components.html(tradingview_widget_html, height=560, scrolling=False)
