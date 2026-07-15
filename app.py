@@ -22,17 +22,31 @@ COMMON_NAME_TRANSLATOR = {
 
 # Helper function to scrape live Index Tickers dynamically
 @st.cache_data(ttl=86400) # Cache lists for 24 hours
+import urllib.request
+
+# Helper function to scrape live Index Tickers dynamically with a browser user-agent
+@st.cache_data(ttl=86400) # Cache lists for 24 hours
 def load_index_tickers(index_name):
+    # Spoof a standard Google Chrome web browser user-agent header
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+    }
     try:
         if index_name == "S&P 500 (US - Mixed)":
             url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-            table = pd.read_html(url, attrs={'id': 'constituents'})[0]
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req) as response:
+                html = response.read()
+            table = pd.read_html(html, attrs={'id': 'constituents'})[0]
             tickers = table['Symbol'].str.replace('.', '-', regex=False).tolist()
             return sorted(tickers)
             
         elif index_name == "NASDAQ 100 (US - Tech)":
             url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
-            tables = pd.read_html(url)
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req) as response:
+                html = response.read()
+            tables = pd.read_html(html)
             for t in tables:
                 if 'Ticker' in t.columns:
                     return sorted(t['Ticker'].tolist())
@@ -40,7 +54,10 @@ def load_index_tickers(index_name):
 
         elif index_name == "FTSE 100 (UK - LSE)":
             url = 'https://en.wikipedia.org/wiki/FTSE_100_Index'
-            tables = pd.read_html(url)
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req) as response:
+                html = response.read()
+            tables = pd.read_html(html)
             for t in tables:
                 if 'EPIC' in t.columns:
                     return sorted([f"{str(sym).strip()}.L" for sym in t['EPIC'].tolist()])
@@ -48,10 +65,10 @@ def load_index_tickers(index_name):
 
         else: # Custom Volatile Watchlist
             return ["TSLA", "NVDA", "AAPL", "PLTR", "COIN", "AMD", "NFLX", "MARA", "MU", "RELIANCE.NS", "SBIN.NS"]
+            
     except Exception as e:
         st.warning(f"Failed to fetch live {index_name} components: {e}")
         return ["TSLA", "NVDA", "AAPL", "MSFT", "AMD", "PLTR", "COIN", "NFLX"]
-
 # Helper function to format tickers for TradingView
 def format_tv_symbol(ticker_symbol):
     ticker_symbol = ticker_symbol.strip().upper()
