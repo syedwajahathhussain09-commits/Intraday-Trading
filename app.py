@@ -210,4 +210,4 @@ with tab2:
         st.metric(label=f"{ticker} Last Price", value=f"{last_price:.2f}")
     with col2:
         last_rsi = float(data['RSI'].iloc[-1])
-        st.metric(label="RSI", value=f"{last_
+        st.metric(label="RSI", value=f"{last_rsi:.2f}")
