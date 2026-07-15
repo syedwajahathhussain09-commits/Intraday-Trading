@@ -5,6 +5,7 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import time
 import urllib.request
+import io  # <--- ADD THIS LINE HERE
 
 # 1. Page Configuration
 st.set_page_config(page_title="Global Intraday Screener", layout="wide")
@@ -33,8 +34,9 @@ def load_index_tickers(index_name):
             url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req) as response:
-                html = response.read()
-            table = pd.read_html(html, attrs={'id': 'constituents'})[0]
+                html = response.read().decode('utf-8')
+            # io.StringIO forces pandas to treat the text as data instead of a file path
+            table = pd.read_html(io.StringIO(html), attrs={'id': 'constituents'})[0]
             tickers = table['Symbol'].str.replace('.', '-', regex=False).tolist()
             return sorted(tickers)
             
@@ -42,8 +44,8 @@ def load_index_tickers(index_name):
             url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req) as response:
-                html = response.read()
-            tables = pd.read_html(html)
+                html = response.read().decode('utf-8')
+            tables = pd.read_html(io.StringIO(html))
             for t in tables:
                 if 'Ticker' in t.columns:
                     return sorted(t['Ticker'].tolist())
@@ -53,8 +55,8 @@ def load_index_tickers(index_name):
             url = 'https://en.wikipedia.org/wiki/FTSE_100_Index'
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req) as response:
-                html = response.read()
-            tables = pd.read_html(html)
+                html = response.read().decode('utf-8')
+            tables = pd.read_html(io.StringIO(html))
             for t in tables:
                 if 'EPIC' in t.columns:
                     return sorted([f"{str(sym).strip()}.L" for sym in t['EPIC'].tolist()])
