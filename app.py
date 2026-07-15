@@ -63,7 +63,7 @@ st.sidebar.header("Configuration")
 # 1. Strategy Selector
 strategy_type = st.sidebar.selectbox(
     "Choose Strategy:",
-    options=["VWAP Pullback", "EMA Crossover"]
+    options=["RSI Range Spotter", "VWAP Pullback", "EMA Crossover"]
 )
 
 # 2. Stock Selection
@@ -93,14 +93,19 @@ tf_settings = TIMEFRAME_MAP[selected_tf]
 
 # 4. Parameters based on Strategy
 st.sidebar.subheader("Strategy Settings")
-if strategy_type == "EMA Crossover":
+rsi_period = st.sidebar.slider("RSI Period", min_value=5, max_value=30, value=14)
+
+if strategy_type == "RSI Range Spotter":
+    st.sidebar.markdown("**RSI Target Zone (Buy)**")
+    rsi_min = st.sidebar.slider("RSI Min Floor", min_value=10, max_value=50, value=30)
+    rsi_max = st.sidebar.slider("RSI Max Ceiling", min_value=15, max_value=60, value=35)
+    
+elif strategy_type == "VWAP Pullback":
+    rsi_oversold = st.sidebar.slider("RSI Entry Threshold (Max)", min_value=30, max_value=70, value=60)
+    
+elif strategy_type == "EMA Crossover":
     fast_span = st.sidebar.slider("Fast EMA", min_value=3, max_value=20, value=9)
     slow_span = st.sidebar.slider("Slow EMA", min_value=10, max_value=50, value=21)
-    rsi_period = st.sidebar.slider("RSI Period", min_value=5, max_value=30, value=14)
-else:
-    # VWAP Pullback parameters
-    rsi_period = st.sidebar.slider("RSI Period", min_value=5, max_value=30, value=14)
-    rsi_oversold = st.sidebar.slider("RSI Entry Threshold (Max)", min_value=30, max_value=70, value=60)
 
 # Format for TV widget
 tv_symbol = format_tv_symbol(ticker)
@@ -148,7 +153,6 @@ with tab2:
     
     with st.spinner(f"Downloading {selected_tf} data for {ticker}..."):
         try:
-            # Force standard single index
             raw_data = yf.download(
                 ticker, 
                 period=tf_settings['yf_period'], 
@@ -167,7 +171,6 @@ with tab2:
             st.stop()
 
     try:
-        # Extract series explicitly to avoid shape mismatches
         close_series = data['Close'].squeeze()
         high_series = data['High'].squeeze()
         low_series = data['Low'].squeeze()
@@ -186,41 +189,48 @@ with tab2:
         # =========================================================================
         # EXECUTE SELECTED STRATEGY
         # =========================================================================
-        if strategy_type == "VWAP Pullback":
-            # Calculate Daily Resetting VWAP
-            # Grouping by date ensures VWAP calculation restarts at 0 each day
+        if strategy_type == "RSI Range Spotter":
+            # BUY: RSI falls squarely within the custom range (e.g. 30 to 35)
+            # AND there is volume support to confirm interest at that bottom
+            data.loc[
+                (data['RSI'] >= rsi_min) & 
+                (data['RSI'] <= rsi_max) & 
+                (volume_series > (data['Vol_SMA'] * 0.8)), 
+                'Signal'
+            ] = 1
+            
+            # SELL/EXIT: RSI recovers and hits overbought territory (e.g., above 65)
+            data.loc[
+                (data['RSI'] > 65), 
+                'Signal'
+            ] = -1
+
+        elif strategy_type == "VWAP Pullback":
             typical_price = (high_series + low_series + close_series) / 3
             tp_vol = typical_price * volume_series
-            
-            # Use Index Dates to Group
             dates = data.index.date
             cum_tp_vol = tp_vol.groupby(dates).cumsum()
             cum_vol = volume_series.groupby(dates).cumsum()
-            
             data['VWAP'] = cum_tp_vol / cum_vol
             
-            # BUY setup: Close price pulls back down near VWAP (but stays above or hits it)
-            # AND RSI is not overbought (< rsi_oversold) AND volume is healthy
             data.loc[
                 (close_series > data['VWAP']) & 
-                (close_series.shift(1) <= data['VWAP']) &  # Price crossed back above VWAP
+                (close_series.shift(1) <= data['VWAP']) & 
                 (data['RSI'] < rsi_oversold) & 
                 (volume_series > data['Vol_SMA'] * 0.9), 
                 'Signal'
             ] = 1
             
-            # SELL/EXIT: Price breaks clearly below the VWAP support line
             data.loc[
                 (close_series < data['VWAP']), 
                 'Signal'
             ] = -1
 
         else:
-            # EMA Crossover Strategy
+            # EMA Crossover
             data['EMA_Fast'] = close_series.ewm(span=fast_span, adjust=False).mean()
             data['EMA_Slow'] = close_series.ewm(span=slow_span, adjust=False).mean()
             
-            # BUY
             data.loc[
                 (data['EMA_Fast'] > data['EMA_Slow']) & 
                 (data['RSI'] < 70) & 
@@ -228,46 +238,59 @@ with tab2:
                 'Signal'
             ] = 1
             
-            # SELL
             data.loc[
                 (data['EMA_Fast'] < data['EMA_Slow']) | 
                 (data['RSI'] > 70), 
                 'Signal'
             ] = -1
 
-        # Calculate exact trigger points where signal flips
+        # Calculate triggers
         data['Position'] = data['Signal'].diff()
 
         # =========================================================================
         # PLOTTING THE STRATEGY
         # =========================================================================
         plot_data = data.tail(100)
-        fig, ax = plt.subplots(figsize=(14, 5))
-
-        ax.plot(plot_data.index, plot_data['Close'], label='Close Price', color='black', alpha=0.7)
         
-        # Plot indicators dynamically based on selected strategy
-        if strategy_type == "VWAP Pullback":
-            ax.plot(plot_data.index, plot_data['VWAP'], label='VWAP (Daily Reset)', color='purple', linewidth=2)
-        else:
-            ax.plot(plot_data.index, plot_data['EMA_Fast'], label=f'{fast_span} EMA', color='blue', linestyle='--')
-            ax.plot(plot_data.index, plot_data['EMA_Slow'], label=f'{slow_span} EMA', color='orange', linestyle='--')
+        # Create a double plot: Price on top, RSI on the bottom!
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+
+        # Subplot 1: Price Chart
+        ax1.plot(plot_data.index, plot_data['Close'], label='Close Price', color='black', alpha=0.7)
+        if strategy_type == "VWAP Pullback" and 'VWAP' in plot_data.columns:
+            ax1.plot(plot_data.index, plot_data['VWAP'], label='VWAP', color='purple', linewidth=2)
+        elif strategy_type == "EMA Crossover" and 'EMA_Fast' in plot_data.columns:
+            ax1.plot(plot_data.index, plot_data['EMA_Fast'], label='Fast EMA', color='blue', linestyle='--')
+            ax1.plot(plot_data.index, plot_data['EMA_Slow'], label='Slow EMA', color='orange', linestyle='--')
 
         # Plot Buy Arrows
         buys = plot_data[plot_data['Position'] == 2]
         if not buys.empty:
-            ax.scatter(buys.index, buys['Close'], label='BUY (Pullback)', marker='^', color='green', s=200)
+            ax1.scatter(buys.index, buys['Close'], label='BUY Signal', marker='^', color='green', s=200)
 
         # Plot Sell/Exit Arrows
         sells = plot_data[plot_data['Position'] == -2]
         if not sells.empty:
-            ax.scatter(sells.index, sells['Close'], label='SELL/EXIT', marker='v', color='red', s=200)
+            ax1.scatter(sells.index, sells['Close'], label='SELL/EXIT', marker='v', color='red', s=200)
 
-        ax.set_title(f"{ticker} - {strategy_type} ({selected_tf} Chart)")
-        ax.set_xlabel("Date/Time")
-        ax.set_ylabel("Price")
-        ax.legend()
-        ax.grid(True)
+        ax1.set_title(f"{ticker} - {strategy_type} ({selected_tf} Chart)")
+        ax1.set_ylabel("Price")
+        ax1.legend()
+        ax1.grid(True)
+
+        # Subplot 2: RSI Chart
+        ax2.plot(plot_data.index, plot_data['RSI'], label='RSI', color='teal', linewidth=1.5)
+        ax2.axhline(70, color='red', linestyle=':', alpha=0.5)
+        ax2.axhline(30, color='green', linestyle=':', alpha=0.5)
+        
+        # Draw target zone lines for RSI Range Spotter
+        if strategy_type == "RSI Range Spotter":
+            ax2.axhspan(rsi_min, rsi_max, color='lightgreen', alpha=0.3, label='Buy Zone')
+            
+        ax2.set_ylabel("RSI")
+        ax2.set_ylim(10, 90)
+        ax2.legend()
+        ax2.grid(True)
 
         st.pyplot(fig)
 
