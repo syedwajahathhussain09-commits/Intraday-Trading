@@ -84,7 +84,7 @@ st.sidebar.header("Configuration")
 search_query = st.sidebar.selectbox(
     "Search Stock Name or Ticker:",
     options=list(STOCK_DIRECTORY.keys()),
-    index=7  # Change index to 7 (Netflix) by default so you can see it working immediately!
+    index=7  # Default to Netflix (index 7)
 )
 ticker = STOCK_DIRECTORY[search_query]
 
@@ -92,10 +92,9 @@ ticker = STOCK_DIRECTORY[search_query]
 custom_ticker = st.sidebar.text_input("Or enter any raw ticker symbol manually:")
 if custom_ticker:
     clean_custom = custom_ticker.strip().upper()
-    # Check if they typed a common company name instead of the symbol
     if clean_custom in COMMON_NAME_TRANSLATOR:
         ticker = COMMON_NAME_TRANSLATOR[clean_custom]
-        st.sidebar.info(f"Auto-corrected '{custom_ticker}' to official ticker: **{ticker}**")
+        st.sidebar.info(f"Auto-corrected to: **{ticker}**")
     else:
         ticker = clean_custom
 
@@ -188,52 +187,5 @@ with tab2:
             st.error(f"Error loading yfinance data: {e}")
             st.stop()
 
-    # =========================================================================
     # 1. CALCULATIONS & INDICATORS
-    # =========================================================================
-    
-    # EMAs
-    data['EMA_Fast'] = data['Close'].ewm(span=fast_span, adjust=False).mean()
-    data['EMA_Slow'] = data['Close'].ewm(span=slow_span, adjust=False).mean()
-
-    # RSI
-    delta = data['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
-    rs = gain / loss
-    data['RSI'] = 100 - (100 / (1 + rs))
-
-    # Average True Range (ATR - 14 Period) for Volatility/Stop Loss
-    high_low = data['High'] - data['Low']
-    high_close = (data['High'] - data['Close'].shift()).abs()
-    low_close = (data['Low'] - data['Close'].shift()).abs()
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    data['ATR'] = ranges.max(axis=1).rolling(window=14).mean()
-
-    # 20-Period Volume Moving Average (to filter low-volume traps)
-    data['Vol_SMA'] = data['Volume'].rolling(window=20).mean()
-
-    # =========================================================================
-    # 2. UPGRADED SIGNAL GENERATION
-    # =========================================================================
-    data['Signal'] = 0
-    
-    # Strong BUY Condition: 
-    # Fast EMA > Slow EMA AND RSI not overbought (< 70) AND Volume is higher than average
-    data.loc[
-        (data['EMA_Fast'] > data['EMA_Slow']) & 
-        (data['RSI'] < 70) & 
-        (data['Volume'] > data['Vol_SMA']), 
-        'Signal'
-    ] = 1
-    
-    # Strong SELL/EXIT Condition: 
-    # Fast EMA < Slow EMA OR RSI is overbought (> 70)
-    data.loc[
-        (data['EMA_Fast'] < data['EMA_Slow']) | 
-        (data['RSI'] > 70), 
-        'Signal'
-    ] = -1
-    
-    # Capture exactly when the signal flips (Buy/Sell arrows)
-    data['Position'] = data['Signal'].diff()
+    data['EMA_Fast'] = data
