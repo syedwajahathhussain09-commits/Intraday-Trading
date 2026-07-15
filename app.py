@@ -4,7 +4,7 @@ import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
 import time
-import urllib.request  # <--- WE MOVED THIS TO THE TOP OF THE FILE!
+import urllib.request
 
 # 1. Page Configuration
 st.set_page_config(page_title="Global Intraday Screener", layout="wide")
@@ -48,6 +48,24 @@ def load_index_tickers(index_name):
                 if 'Ticker' in t.columns:
                     return sorted(t['Ticker'].tolist())
             return ["AAPL", "MSFT", "AMZN", "NVDA", "TSLA", "META", "GOOGL", "NFLX", "AMD", "INTC"]
+
+        elif index_name == "FTSE 100 (UK - LSE)":
+            url = 'https://en.wikipedia.org/wiki/FTSE_100_Index'
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req) as response:
+                html = response.read()
+            tables = pd.read_html(html)
+            for t in tables:
+                if 'EPIC' in t.columns:
+                    return sorted([f"{str(sym).strip()}.L" for sym in t['EPIC'].tolist()])
+            return ["SHEL.L", "AZN.L", "HSBA.L", "ULVR.L", "BP.L", "GSK.L", "RIO.L", "LLOY.L"]
+
+        else: # Custom Volatile Watchlist
+            return ["TSLA", "NVDA", "AAPL", "PLTR", "COIN", "AMD", "NFLX", "MARA", "MU", "RELIANCE.NS", "SBIN.NS"]
+            
+    except Exception as e:
+        st.warning(f"Failed to fetch live {index_name} components: {e}")
+        return ["TSLA", "NVDA", "AAPL", "MSFT", "AMD", "PLTR", "COIN", "NFLX"]
 
 # Helper function to format tickers for TradingView
 def format_tv_symbol(ticker_symbol):
@@ -391,7 +409,8 @@ with tab3:
     # Selection of which index to scan
     index_selection = st.selectbox(
         "Select Market Index to Scan:",
-        options=["NASDAQ 100 (US - Tech)", "S&P 500 (US - Mixed)", "FTSE 100 (UK - LSE)", "Volatile Watchlist (Hybrid)"]
+        options=["NASDAQ 100 (US - Tech)", "S&P 500 (US - Mixed)", "FTSE 100 (UK - LSE)", "Volatile Watchlist (Hybrid)"],
+        key="screener_index_selector"  # Distinct key to prevent cross-filtering state bugs
     )
     
     # Load tickers based on choice
@@ -406,7 +425,7 @@ with tab3:
         "Limit scan size (Up to maximum watchlist length):", 
         min_value=0, 
         max_value=slider_max, 
-        value=min(100, num_tickers) # Default to 100 for high speed
+        value=min(100, num_tickers)
     )
     
     if st.button("🚀 Run Live Index Scan"):
@@ -417,35 +436,33 @@ with tab3:
             progress_placeholder = st.empty()
             progress_bar = st.progress(0)
             
-            # Sub-slice list based on user-selected scan limit
-            active_scan_list = watchlist_tickers[:scan_limit]
+            # Sub-slice the actual dynamically loaded index tickers
+            active_scan_list = list(watchlist_tickers)[:scan_limit]
+            total_tickers = len(active_scan_list)
             
-            # =========================================================================
-            # HIGH-SPEED MULTI-THREADED BULK DOWNLOAD
-            # =========================================================================
             progress_placeholder.text("Initiating high-speed batch download...")
             
             try:
-                # One single, massive parallelized API download request for all tickers!
+                # 1. Threaded parallel multi-ticker download
                 bulk_data = yf.download(
                     tickers=active_scan_list,
                     period="5d",
                     interval=tf_settings['yf_interval'],
-                    group_by='ticker',  # Group everything by individual ticker structures
-                    threads=True,       # ACTIVATE MULTI-THREADING ENGINE
+                    threads=True,
                     progress=False
                 )
                 
                 progress_placeholder.text("Processing indicator mathematics across indices...")
                 
-                # Loop through columns and calculate strategy indicators in-memory
+                # 2. Iterate through each parsed ticker and cross-section slice (.xs)
                 for idx, s_ticker in enumerate(active_scan_list):
-                    progress_bar.progress(int((idx + 1) / len(active_scan_list) * 100))
+                    progress_bar.progress(int((idx + 1) / total_tickers * 100))
                     
                     try:
-                        # Extract this specific stock's DataFrame from the bulk download
-                        if len(active_scan_list) > 1:
-                            s_data = bulk_data[s_ticker].dropna()
+                        # Slice column elements cross-sectionally for the single ticker
+                        if total_tickers > 1:
+                            # Level 1 represents columns like Close, Open. Level 0 represents the Symbol in multi-ticker downloads
+                            s_data = bulk_data.xs(s_ticker, axis=1, level=1).dropna()
                         else:
                             s_data = bulk_data.dropna()
                             
@@ -511,7 +528,7 @@ with tab3:
                             "Timestamp": str(s_data.index[-1].strftime('%H:%M:%S'))
                         })
                         
-                    except Exception:
+                    except Exception as e:
                         continue
                         
                 progress_placeholder.success(f"Successfully scanned {len(screener_results)} stocks!")
