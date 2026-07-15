@@ -6,28 +6,63 @@ import matplotlib.pyplot as plt
 import time
 
 # 1. Page Configuration
-st.set_page_config(page_title="Intraday Strategy Dashboard", layout="wide")
-st.title("📈 Professional Intraday Trading & Screener Dashboard")
+st.set_page_config(page_title="Global Intraday Screener", layout="wide")
+st.title("📈 Global Intraday Trading & Screener Dashboard")
 
 # Dictionary to map user-typed common company names to real ticker symbols
 COMMON_NAME_TRANSLATOR = {
     "NETFLIX": "NFLX", "APPLE": "AAPL", "MICROSOFT": "MSFT",
     "TESLA": "TSLA", "NVIDIA": "NVDA", "AMAZON": "AMZN",
     "GOOGLE": "GOOGL", "META": "META", "COCA COLA": "KO",
-    "COCACOLA": "KO", "RELIANCE": "RELIANCE.NS", "TATA": "TCS.NS",
-    "TCS": "TCS.NS", "INFOSYS": "INFY.NS", "HDFC": "HDFCBANK.NS",
-    "SBI": "SBIN.NS", "COINBASE": "COIN", "PALANTIR": "PLTR",
-    "MARATHON": "MARA", "AMD": "AMD", "MICRON": "MU"
+    "RELIANCE": "RELIANCE.NS", "TATA": "TCS.NS", "TCS": "TCS.NS",
+    "INFOSYS": "INFY.NS", "HDFC": "HDFCBANK.NS", "SBI": "SBIN.NS",
+    "COINBASE": "COIN", "PALANTIR": "PLTR", "MARATHON": "MARA",
+    "AMD": "AMD", "MICRON": "MU"
 }
 
-# Predefined high-volatility US stock watchlist for the scanner
-US_VOLATILE_WATCHLIST = ["TSLA", "NVDA", "AAPL", "MSFT", "PLTR", "COIN", "AMD", "NFLX", "MARA", "MU"]
+# Helper function to scrape live Index Tickers dynamically
+@st.cache_data(ttl=86400) # Cache index composition for 24 hours to keep page loading super fast
+def load_index_tickers(index_name):
+    try:
+        if index_name == "S&P 500 (US - Mixed)":
+            url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+            table = pd.read_html(url, attrs={'id': 'constituents'})[0]
+            # yfinance uses dots instead of dashes for multi-class shares (e.g. BRK.B instead of BRK-B)
+            tickers = table['Symbol'].str.replace('.', '-', regex=False).tolist()
+            return sorted(tickers)
+            
+        elif index_name == "NASDAQ 100 (US - Tech)":
+            url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
+            tables = pd.read_html(url)
+            # Find the constituents table
+            for t in tables:
+                if 'Ticker' in t.columns:
+                    return sorted(t['Ticker'].tolist())
+            return ["AAPL", "MSFT", "AMZN", "NVDA", "TSLA", "META", "GOOGL", "NFLX", "AMD", "INTC"]
+
+        elif index_name == "FTSE 100 (UK - LSE)":
+            url = 'https://en.wikipedia.org/wiki/FTSE_100_Index'
+            tables = pd.read_html(url)
+            for t in tables:
+                if 'EPIC' in t.columns:
+                    # LSE tickers on Yahoo Finance need the ".L" suffix
+                    return sorted([f"{str(sym).strip()}.L" for sym in t['EPIC'].tolist()])
+            return ["SHEL.L", "AZN.L", "HSBA.L", "ULVR.L", "BP.L", "GSK.L", "RIO.L", "LLOY.L"]
+
+        else: # Custom Volatile Watchlist
+            return ["TSLA", "NVDA", "AAPL", "PLTR", "COIN", "AMD", "NFLX", "MARA", "MU", "RELIANCE.NS", "SBIN.NS"]
+    except Exception as e:
+        # Fail-safe backup list if Wikipedia rejects the scraping request
+        st.warning(f"Failed to fetch live {index_name} components from Wikipedia (using backup list): {e}")
+        return ["TSLA", "NVDA", "AAPL", "MSFT", "AMD", "PLTR", "COIN", "NFLX"]
 
 # Helper function to format tickers for TradingView
 def format_tv_symbol(ticker_symbol):
     ticker_symbol = ticker_symbol.strip().upper()
     if ticker_symbol.endswith(".NS"):
         return f"NSE:{ticker_symbol.replace('.NS', '')}"
+    if ticker_symbol.endswith(".L"):
+        return f"LSE:{ticker_symbol.replace('.L', '')}"
     
     us_nasdaq = ["AAPL", "MSFT", "TSLA", "NVDA", "AMZN", "GOOGL", "META", "NFLX", "QQQ", "COIN", "PLTR", "MARA", "AMD", "MU"]
     us_nyse = ["KO", "BRK.B", "BRK-B", "NKE", "DIS", "SPY"]
@@ -47,7 +82,7 @@ TIMEFRAME_MAP = {
     "1 Day": {"yf_interval": "1d", "yf_period": "5y", "tv_interval": "D"}
 }
 
-# Comprehensive Stock Directory
+# Comprehensive Stock Directory for Manual search dropdown
 STOCK_DIRECTORY = {
     "Tesla Inc. (TSLA)": "TSLA",
     "NVIDIA Corp. (NVDA)": "NVDA",
@@ -56,7 +91,7 @@ STOCK_DIRECTORY = {
     "Palantir (PLTR)": "PLTR",
     "Coinbase (COIN)": "COIN",
     "Netflix Inc. (NFLX)": "NFLX",
-    "Reliance Industries Ltd. (RELIANCE.NS)": "RELIANCE.NS",
+    "State Bank of India (SBIN.NS)": "SBIN.NS",
 }
 
 # =========================================================================
@@ -72,13 +107,13 @@ strategy_type = st.sidebar.selectbox(
 
 # 2. Stock Selection (For Tab 1 & Tab 2)
 search_query = st.sidebar.selectbox(
-    "Search Stock Name or Ticker:",
+    "Search Single Stock:",
     options=list(STOCK_DIRECTORY.keys()),
-    index=0  # Default to Tesla
+    index=0 
 )
 ticker = STOCK_DIRECTORY[search_query]
 
-custom_ticker = st.sidebar.text_input("Or enter any raw ticker symbol manually:")
+custom_ticker = st.sidebar.text_input("Or enter raw symbol (e.g. BARC.L or SBIN.NS):")
 if custom_ticker:
     clean_custom = custom_ticker.strip().upper()
     if clean_custom in COMMON_NAME_TRANSLATOR:
@@ -115,7 +150,7 @@ elif strategy_type == "EMA Crossover":
 tv_symbol = format_tv_symbol(ticker)
 
 # Create Tabs
-tab1, tab2, tab3 = st.tabs(["📺 Live TradingView Chart", "📊 Python Strategy Signals", "🔍 Real-Time Screener"])
+tab1, tab2, tab3 = st.tabs(["📺 Live TradingView Chart", "📊 Python Strategy Signals", "🔍 Real-Time Index Screener"])
 
 # --- TAB 1: Live Interactive TradingView Chart ---
 with tab1:
@@ -355,29 +390,43 @@ with tab2:
         st.error(f"Error calculating strategy: {calculation_error}")
 
 
-# --- TAB 3: Real-Time Watchlist Screener (NEW) ---
+# --- TAB 3: Real-Time Index Screener ---
 with tab3:
-    st.subheader(f"🔍 Real-Time Market Screener ({selected_tf})")
-    st.write(f"Scans a watchlist of high-volatility US stocks for active **{strategy_type}** setups.")
+    st.subheader("🔍 Dynamic Global Index Screener")
+    st.write("Scan entire index lists from the NYSE, NASDAQ, and LSE in seconds using dynamically scraped Wikipedia compositions.")
     
-    # Custom Trigger Button
-    if st.button("🚀 Run Real-Time Watchlist Scan"):
+    # Selection of which index to scan
+    index_selection = st.selectbox(
+        "Select Market Index to Scan:",
+        options=["NASDAQ 100 (US - Tech)", "S&P 500 (US - Mixed)", "FTSE 100 (UK - LSE)", "Volatile Watchlist (Hybrid)"]
+    )
+    
+    # Load tickers based on choice
+    watchlist_tickers = load_index_tickers(index_selection)
+    st.info(f"Loaded **{len(watchlist_tickers)}** tickers for {index_selection}.")
+    
+    # Scan limitation slider to protect API rate-limiting
+    scan_limit = st.slider("Limit scan size (Highly recommended to avoid IP ban):", min_value=10, max_value=len(watchlist_tickers), value=min(50, len(watchlist_tickers)))
+    
+    # Trigger Button
+    if st.button("🚀 Run Live Index Scan"):
         screener_results = []
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # Calculate steps for progress indicator
-        total_tickers = len(US_VOLATILE_WATCHLIST)
+        # Sub-slice list to keep things within boundaries
+        active_scan_list = watchlist_tickers[:scan_limit]
+        total_tickers = len(active_scan_list)
         
-        for idx, s_ticker in enumerate(US_VOLATILE_WATCHLIST):
+        for idx, s_ticker in enumerate(active_scan_list):
             status_text.text(f"Scanning {s_ticker} ({idx+1}/{total_tickers})...")
             progress_bar.progress(int((idx + 1) / total_tickers * 100))
             
             try:
-                # Get the dynamic period and interval
+                # Download data (shorter period to accelerate screening and reduce traffic)
                 s_data = yf.download(
                     s_ticker, 
-                    period=tf_settings['yf_period'], 
+                    period="5d", 
                     interval=tf_settings['yf_interval'],
                     multi_level_index=False,
                     progress=False
@@ -391,14 +440,13 @@ with tab3:
                 s_low = s_data['Low'].squeeze()
                 s_volume = s_data['Volume'].squeeze()
                 
-                # Calculations
+                # Indicator Calculations
                 s_delta = s_close.diff()
                 s_gain = (s_delta.where(s_delta > 0, 0)).rolling(window=rsi_period).mean()
                 s_loss = (-s_delta.where(s_delta < 0, 0)).rolling(window=rsi_period).mean()
                 s_rs = s_gain / s_loss
                 s_rsi = 100 - (100 / (1 + s_rs))
                 
-                # Volume Moving Average
                 s_vol_sma = s_volume.rolling(window=10).mean()
                 
                 current_price = float(s_close.iloc[-1])
@@ -408,7 +456,7 @@ with tab3:
                 
                 action = "⚪ HOLD / NEUTRAL"
                 
-                # Apply Strategy Signal rules to determine instant recommendation
+                # Apply Strategy rules
                 if strategy_type == "RSI Range Spotter":
                     if (current_rsi >= rsi_min) and (current_rsi <= rsi_max) and (current_vol > current_vol_sma * 0.8):
                         action = "🟢 BUY (OVERSOLD DIP)"
@@ -416,7 +464,6 @@ with tab3:
                         action = "🔴 SELL (TAKE PROFIT)"
                         
                 elif strategy_type == "VWAP Pullback":
-                    # Simple VWAP calculation
                     typical_price = (s_high + s_low + s_close) / 3
                     tp_vol = typical_price * s_volume
                     dates = s_data.index.date
@@ -430,7 +477,7 @@ with tab3:
                     elif current_price < current_vwap:
                         action = "🔴 SELL (BELLOW VWAP)"
                         
-                else:  # EMA Crossover
+                else: # EMA Crossover
                     s_fast = s_close.ewm(span=fast_span, adjust=False).mean()
                     s_slow = s_close.ewm(span=slow_span, adjust=False).mean()
                     
@@ -439,33 +486,27 @@ with tab3:
                     else:
                         action = "🔴 SELL / NEUTRAL TREND"
                 
-                # Add to result list
                 screener_results.append({
                     "Stock": s_ticker,
-                    "Current Price": f"${current_price:.2f}",
+                    "Current Price": f"${current_price:.2f}" if not s_ticker.endswith(".L") else f"£{current_price/100:.2f}",
                     "RSI": round(current_rsi, 1),
                     "Action Status": action,
                     "Timestamp": str(s_data.index[-1].strftime('%H:%M:%S'))
                 })
                 
-                # Settle request slightly to satisfy APIs limits
-                time.sleep(0.1)
+                # Tiny rest limit to avoid triggering anti-bot firewalls
+                time.sleep(0.05)
                 
-            except Exception as e:
-                # Gracefully skip if a single ticker breaks
+            except Exception:
+                # Silently skip failed downloads to keep the scan progressing
                 continue
                 
         status_text.success("Scan Completed!")
         
-        # 4. Display Screener Table
+        # Display Results
         if screener_results:
             df_results = pd.DataFrame(screener_results)
             
-            # 4. Display Screener Table
-        if screener_results:
-            df_results = pd.DataFrame(screener_results)
-            
-            # Style the table layout beautifully inside Streamlit
             def style_status(val):
                 if "🟢" in val:
                     return 'background-color: #d4edda; color: #155724; font-weight: bold;'
@@ -473,11 +514,8 @@ with tab3:
                     return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
                 return 'background-color: #e2e3e5; color: #383d41;'
             
-    
-            
-            # Apply styling and render
             styled_df = df_results.style.map(style_status, subset=['Action Status'])
-            st.dataframe(styled_df, use_container_width=True, height=400)
+            st.dataframe(styled_df, use_container_width=True, height=500)
             
         else:
-            st.warning("Scan finished, but no data could be retrieved. Try again during active trading hours.") 
+            st.warning("Scan finished, but no data could be retrieved.")
