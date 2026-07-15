@@ -3,10 +3,11 @@ import streamlit.components.v1 as components
 import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
+import time
 
 # 1. Page Configuration
 st.set_page_config(page_title="Intraday Strategy Dashboard", layout="wide")
-st.title("📈 Professional Intraday Trading Dashboard")
+st.title("📈 Professional Intraday Trading & Screener Dashboard")
 
 # Dictionary to map user-typed common company names to real ticker symbols
 COMMON_NAME_TRANSLATOR = {
@@ -18,6 +19,9 @@ COMMON_NAME_TRANSLATOR = {
     "SBI": "SBIN.NS", "COINBASE": "COIN", "PALANTIR": "PLTR",
     "MARATHON": "MARA", "AMD": "AMD", "MICRON": "MU"
 }
+
+# Predefined high-volatility US stock watchlist for the scanner
+US_VOLATILE_WATCHLIST = ["TSLA", "NVDA", "AAPL", "MSFT", "PLTR", "COIN", "AMD", "NFLX", "MARA", "MU"]
 
 # Helper function to format tickers for TradingView
 def format_tv_symbol(ticker_symbol):
@@ -31,7 +35,7 @@ def format_tv_symbol(ticker_symbol):
     if ticker_symbol in us_nasdaq:
         return f"NASDAQ:{ticker_symbol}"
     if ticker_symbol in us_nyse:
-        return f"NYSE:{ticker_symbol.replace('-', '.')}"
+        return f"NYSE:{ticker_symbol.replace('-', '.').replace('_', '.')}"
     return ticker_symbol
 
 # Map selections to yfinance settings
@@ -66,7 +70,7 @@ strategy_type = st.sidebar.selectbox(
     options=["RSI Range Spotter", "VWAP Pullback", "EMA Crossover"]
 )
 
-# 2. Stock Selection
+# 2. Stock Selection (For Tab 1 & Tab 2)
 search_query = st.sidebar.selectbox(
     "Search Stock Name or Ticker:",
     options=list(STOCK_DIRECTORY.keys()),
@@ -111,7 +115,7 @@ elif strategy_type == "EMA Crossover":
 tv_symbol = format_tv_symbol(ticker)
 
 # Create Tabs
-tab1, tab2 = st.tabs(["📺 Live TradingView Chart", "📊 Python Strategy Signals"])
+tab1, tab2, tab3 = st.tabs(["📺 Live TradingView Chart", "📊 Python Strategy Signals", "🔍 Real-Time Screener"])
 
 # --- TAB 1: Live Interactive TradingView Chart ---
 with tab1:
@@ -176,7 +180,7 @@ with tab2:
         low_series = data['Low'].squeeze()
         volume_series = data['Volume'].squeeze()
 
-        # Calculate Common Indicators
+        # Calculate Indicators
         delta = close_series.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
@@ -186,9 +190,6 @@ with tab2:
         data['Vol_SMA'] = volume_series.rolling(window=10).mean()
         data['Signal'] = 0
 
-        # =========================================================================
-        # EXECUTE SELECTED STRATEGY
-        # =========================================================================
         if strategy_type == "RSI Range Spotter":
             data.loc[
                 (data['RSI'] >= rsi_min) & 
@@ -241,35 +242,31 @@ with tab2:
                 'Signal'
             ] = -1
 
-        # Calculate triggers
         data['Position'] = data['Signal'].diff()
 
         # =========================================================================
-        # LIVE SIGNAL ADVISOR MODULE (NEW)
+        # LIVE SIGNAL ADVISOR MODULE
         # =========================================================================
         st.markdown("---")
         st.markdown("### 🚨 Live Signal Advisor")
         
-        # Determine the status of the absolute last bar in the dataset
         last_row = data.iloc[-1]
         last_price = float(close_series.iloc[-1])
         last_rsi = float(data['RSI'].iloc[-1])
         last_signal = int(last_row['Signal'])
         
-        # Calculate ATR for target and stop-loss levels
+        # ATR Calculation
         high_low = high_series - low_series
         high_close = (high_series - close_series.shift()).abs()
         low_close = (low_series - close_series.shift()).abs()
         ranges = pd.concat([high_low, high_close, low_close], axis=1)
         atr_value = float(ranges.max(axis=1).rolling(window=14).mean().iloc[-1])
 
-        # Render Alert box based on current signal
         col_sig, col_metrics = st.columns([1.5, 2])
         
         with col_sig:
             if last_signal == 1:
                 st.success(f"### 🟢 ACTIVE ACTION: BUY / LONG\n**Price:** ${last_price:.2f} | **RSI:** {last_rsi:.1f}")
-                # ATR Stop-Loss and Target levels
                 stop_loss = last_price - (1.5 * atr_value)
                 target = last_price + (3.0 * atr_value)
                 st.markdown(f"""
@@ -304,7 +301,6 @@ with tab2:
         
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
 
-        # Subplot 1: Price Chart
         ax1.plot(plot_data.index, plot_data['Close'], label='Close Price', color='black', alpha=0.7)
         if strategy_type == "VWAP Pullback" and 'VWAP' in plot_data.columns:
             ax1.plot(plot_data.index, plot_data['VWAP'], label='VWAP', color='purple', linewidth=2)
@@ -312,12 +308,10 @@ with tab2:
             ax1.plot(plot_data.index, plot_data['EMA_Fast'], label='Fast EMA', color='blue', linestyle='--')
             ax1.plot(plot_data.index, plot_data['EMA_Slow'], label='Slow EMA', color='orange', linestyle='--')
 
-        # Plot Buy Arrows
         buys = plot_data[plot_data['Position'] == 2]
         if not buys.empty:
             ax1.scatter(buys.index, buys['Close'], label='BUY Signal', marker='^', color='green', s=200)
 
-        # Plot Sell/Exit Arrows
         sells = plot_data[plot_data['Position'] == -2]
         if not sells.empty:
             ax1.scatter(sells.index, sells['Close'], label='SELL/EXIT', marker='v', color='red', s=200)
@@ -327,7 +321,6 @@ with tab2:
         ax1.legend()
         ax1.grid(True)
 
-        # Subplot 2: RSI Chart
         ax2.plot(plot_data.index, plot_data['RSI'], label='RSI', color='teal', linewidth=1.5)
         ax2.axhline(70, color='red', linestyle=':', alpha=0.5)
         ax2.axhline(30, color='green', linestyle=':', alpha=0.5)
@@ -343,24 +336,142 @@ with tab2:
         st.pyplot(fig)
 
         # =========================================================================
-        # RECENT TRADES HISTORY LOG (NEW)
+        # RECENT TRADES HISTORY LOG
         # =========================================================================
         st.markdown("### 📜 Recent Signal Execution Logs")
-        
-        # Filter rows where a buy or sell trigger happened
         history = data[data['Position'].isin([2, -2])].copy()
         
         if not history.empty:
-            # Map values to readable words
             history['Action'] = history['Position'].apply(lambda x: "🟢 BUY / LONG" if x == 2 else "🔴 SELL / EXIT")
             history['Price'] = history['Close'].round(2)
             history['RSI_at_Trigger'] = history['RSI'].round(1)
             
-            # Select relevant columns and display as a table
             history_display = history[['Action', 'Price', 'RSI_at_Trigger']].tail(5).sort_index(ascending=False)
             st.dataframe(history_display, use_container_width=True)
         else:
-            st.info("No signal crossovers found in the loaded historical window. Try adjusting parameters or looking at another timeframe.")
+            st.info("No signal crossovers found in the loaded historical window.")
 
     except Exception as calculation_error:
         st.error(f"Error calculating strategy: {calculation_error}")
+
+
+# --- TAB 3: Real-Time Watchlist Screener (NEW) ---
+with tab3:
+    st.subheader(f"🔍 Real-Time Market Screener ({selected_tf})")
+    st.write(f"Scans a watchlist of high-volatility US stocks for active **{strategy_type}** setups.")
+    
+    # Custom Trigger Button
+    if st.button("🚀 Run Real-Time Watchlist Scan"):
+        screener_results = []
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        # Calculate steps for progress indicator
+        total_tickers = len(US_VOLATILE_WATCHLIST)
+        
+        for idx, s_ticker in enumerate(US_VOLATILE_WATCHLIST):
+            status_text.text(f"Scanning {s_ticker} ({idx+1}/{total_tickers})...")
+            progress_bar.progress(int((idx + 1) / total_tickers * 100))
+            
+            try:
+                # Get the dynamic period and interval
+                s_data = yf.download(
+                    s_ticker, 
+                    period=tf_settings['yf_period'], 
+                    interval=tf_settings['yf_interval'],
+                    multi_level_index=False,
+                    progress=False
+                )
+                
+                if s_data.empty:
+                    continue
+                    
+                s_close = s_data['Close'].squeeze()
+                s_high = s_data['High'].squeeze()
+                s_low = s_data['Low'].squeeze()
+                s_volume = s_data['Volume'].squeeze()
+                
+                # Calculations
+                s_delta = s_close.diff()
+                s_gain = (s_delta.where(s_delta > 0, 0)).rolling(window=rsi_period).mean()
+                s_loss = (-s_delta.where(s_delta < 0, 0)).rolling(window=rsi_period).mean()
+                s_rs = s_gain / s_loss
+                s_rsi = 100 - (100 / (1 + s_rs))
+                
+                # Volume Moving Average
+                s_vol_sma = s_volume.rolling(window=10).mean()
+                
+                current_price = float(s_close.iloc[-1])
+                current_rsi = float(s_rsi.iloc[-1])
+                current_vol = float(s_volume.iloc[-1])
+                current_vol_sma = float(s_vol_sma.iloc[-1])
+                
+                action = "⚪ HOLD / NEUTRAL"
+                
+                # Apply Strategy Signal rules to determine instant recommendation
+                if strategy_type == "RSI Range Spotter":
+                    if (current_rsi >= rsi_min) and (current_rsi <= rsi_max) and (current_vol > current_vol_sma * 0.8):
+                        action = "🟢 BUY (OVERSOLD DIP)"
+                    elif current_rsi > 65:
+                        action = "🔴 SELL (TAKE PROFIT)"
+                        
+                elif strategy_type == "VWAP Pullback":
+                    # Simple VWAP calculation
+                    typical_price = (s_high + s_low + s_close) / 3
+                    tp_vol = typical_price * s_volume
+                    dates = s_data.index.date
+                    cum_tp_vol = tp_vol.groupby(dates).cumsum()
+                    cum_vol = s_volume.groupby(dates).cumsum()
+                    s_vwap_series = cum_tp_vol / cum_vol
+                    current_vwap = float(s_vwap_series.iloc[-1])
+                    
+                    if (current_price > current_vwap) and (float(s_close.iloc[-2]) <= float(s_vwap_series.iloc[-2])) and (current_rsi < rsi_oversold):
+                        action = "🟢 BUY (VWAP SUPPORT TEST)"
+                    elif current_price < current_vwap:
+                        action = "🔴 SELL (BELLOW VWAP)"
+                        
+                else:  # EMA Crossover
+                    s_fast = s_close.ewm(span=fast_span, adjust=False).mean()
+                    s_slow = s_close.ewm(span=slow_span, adjust=False).mean()
+                    
+                    if (float(s_fast.iloc[-1]) > float(s_slow.iloc[-1])) and (current_rsi < 70):
+                        action = "🟢 BUY (EMA GOLDEN CROSS)"
+                    else:
+                        action = "🔴 SELL / NEUTRAL TREND"
+                
+                # Add to result list
+                screener_results.append({
+                    "Stock": s_ticker,
+                    "Current Price": f"${current_price:.2f}",
+                    "RSI": round(current_rsi, 1),
+                    "Action Status": action,
+                    "Timestamp": str(s_data.index[-1].strftime('%H:%M:%S'))
+                })
+                
+                # Settle request slightly to satisfy APIs limits
+                time.sleep(0.1)
+                
+            except Exception as e:
+                # Gracefully skip if a single ticker breaks
+                continue
+                
+        status_text.success("Scan Completed!")
+        
+        # 4. Display Screener Table
+        if screener_results:
+            df_results = pd.DataFrame(screener_results)
+            
+            # Style the table layout beautifully inside Streamlit
+            def style_status(val):
+                if "🟢" in val:
+                    return 'background-color: #d4edda; color: #155724; font-weight: bold;'
+                elif "🔴" in val:
+                    return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
+                return 'background-color: #e2e3e5; color: #383d41;'
+            
+            # Apply styling and render
+            styled_df = df_results.style.applymap(style_status, subset=['Action Status'])
+            st.dataframe(styled_df, use_container_width=True, height=400)
+            
+        else:
+            st.warning("Scan finished, but no data could be retrieved. Try again during active trading hours.")
