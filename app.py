@@ -442,8 +442,8 @@ with tab3:
             active_scan_list = list(watchlist_tickers)[:scan_limit]
             total_tickers = len(active_scan_list)
             
-            # --- BATCH PARTITIONING SETUP ---
-            BATCH_SIZE = 15  # Download in safe, highly stable clusters of 15
+            # --- STABLE BATCH PARTITIONING ---
+            BATCH_SIZE = 10  # Reduced to a highly stable batch size of 10
             ticker_batches = [active_scan_list[i:i + BATCH_SIZE] for i in range(0, len(active_scan_list), BATCH_SIZE)]
             total_batches = len(ticker_batches)
             
@@ -453,28 +453,27 @@ with tab3:
                 progress_placeholder.text(f"Downloading batch {batch_idx + 1} of {total_batches} ({len(batch)} symbols)...")
                 
                 try:
-                    # Threaded parallel download for this specific sub-batch (with a safety timeout)
+                    # threads=False prevents the multi-threading deadlock that crashes Streamlit
                     bulk_data = yf.download(
                         tickers=batch,
                         period="5d",
                         interval=tf_settings['yf_interval'],
-                        threads=True,
+                        threads=False,   # <--- DISABLED MULTI-THREADING FOR STABILITY
                         progress=False,
-                        timeout=15  # Drop hanging connections after 15 seconds instead of crashing
+                        timeout=10
                     )
                     
                     if bulk_data.empty:
                         processed_count += len(batch)
                         continue
                         
-                    # Process indicators for each ticker in the successfully downloaded batch
+                    # Process indicators
                     for s_ticker in batch:
                         processed_count += 1
-                        # Update the progress bar incrementally
                         progress_bar.progress(int((processed_count) / total_tickers * 100))
                         
                         try:
-                            # Extract this single ticker's data from our batch dataframe
+                            # Extract single ticker data
                             if len(batch) > 1:
                                 s_data = bulk_data.xs(s_ticker, axis=1, level=1).dropna()
                             else:
@@ -543,14 +542,12 @@ with tab3:
                             })
                             
                         except Exception:
-                            # Skip single ticker errors within the batch gracefully
                             continue
                     
-                    # Short cool-down pause between batches to protect connection sockets
-                    time.sleep(0.1)
+                    # 0.5s pause allows connection sockets to close completely before starting next batch
+                    time.sleep(0.5) 
                     
                 except Exception as batch_err:
-                    # If a whole batch fails, skip it gracefully and don't crash the script!
                     processed_count += len(batch)
                     continue
                     
