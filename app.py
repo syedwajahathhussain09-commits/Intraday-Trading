@@ -461,6 +461,10 @@ with tab3:
         if screener_results:
             df_results = pd.DataFrame(screener_results)
             
+            # 4. Display Screener Table
+        if screener_results:
+            df_results = pd.DataFrame(screener_results)
+            
             # Style the table layout beautifully inside Streamlit
             def style_status(val):
                 if "🟢" in val:
@@ -469,9 +473,11 @@ with tab3:
                     return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
                 return 'background-color: #e2e3e5; color: #383d41;'
             
+    
+            
             # Apply styling and render
-            styled_df = df_results.style.applymap(style_status, subset=['Action Status'])
+            styled_df = df_results.style.map(style_status, subset=['Action Status'])
             st.dataframe(styled_df, use_container_width=True, height=400)
             
         else:
-            st.warning("Scan finished, but no data could be retrieved. Try again during active trading hours.")
+            st.warning("Scan finished, but no data could be retrieved. Try again during active trading hours.") 
