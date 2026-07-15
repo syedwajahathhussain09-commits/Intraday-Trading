@@ -405,9 +405,15 @@ with tab3:
     watchlist_tickers = load_index_tickers(index_selection)
     st.info(f"Loaded **{len(watchlist_tickers)}** tickers for {index_selection}.")
     
-    # Scan limitation slider to protect API rate-limiting
-    scan_limit = st.slider("Limit scan size (Highly recommended to avoid IP ban):", min_value=10, max_value=len(watchlist_tickers), value=min(50, len(watchlist_tickers)))
-    
+    # Dynamically determine the minimum value for the slider (either 1 or 10, depending on list size)
+slider_min = min(10, len(watchlist_tickers)) if len(watchlist_tickers) > 0 else 1
+
+scan_limit = st.slider(
+    "Limit scan size (Highly recommended to avoid IP ban):", 
+    min_value=slider_min, 
+    max_value=max(1, len(watchlist_tickers)), 
+    value=min(50, len(watchlist_tickers))
+)
     # Trigger Button
     if st.button("🚀 Run Live Index Scan"):
         screener_results = []
