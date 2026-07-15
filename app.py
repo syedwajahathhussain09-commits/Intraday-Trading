@@ -8,7 +8,27 @@ import matplotlib.pyplot as plt
 st.set_page_config(page_title="Multi-Timeframe Intraday Dashboard", layout="wide")
 st.title("📈 Multi-Timeframe Trading Dashboard")
 
-# 2. Enhanced Helper to format tickers specifically for TradingView's API
+# Dictionary to map user-typed common company names to real ticker symbols
+COMMON_NAME_TRANSLATOR = {
+    "NETFLIX": "NFLX",
+    "APPLE": "AAPL",
+    "MICROSOFT": "MSFT",
+    "TESLA": "TSLA",
+    "NVIDIA": "NVDA",
+    "AMAZON": "AMZN",
+    "GOOGLE": "GOOGL",
+    "META": "META",
+    "COCA COLA": "KO",
+    "COCACOLA": "KO",
+    "RELIANCE": "RELIANCE.NS",
+    "TATA": "TCS.NS",
+    "TCS": "TCS.NS",
+    "INFOSYS": "INFY.NS",
+    "HDFC": "HDFCBANK.NS",
+    "SBI": "SBIN.NS"
+}
+
+# Helper function to format tickers specifically for TradingView's API
 def format_tv_symbol(ticker_symbol):
     ticker_symbol = ticker_symbol.strip().upper()
     
@@ -24,14 +44,12 @@ def format_tv_symbol(ticker_symbol):
     if ticker_symbol in us_nasdaq:
         return f"NASDAQ:{ticker_symbol}"
     if ticker_symbol in us_nyse:
-        # TradingView uses BRK.B instead of BRK-B
         clean_nyse = ticker_symbol.replace("-", ".")
         return f"NYSE:{clean_nyse}"
     
-    # Fallback default: Let TradingView try to auto-resolve the bare ticker
     return ticker_symbol
 
-# Map selections to (yfinance_interval, yfinance_period, tradingview_interval, resample_rule)
+# Map selections to yfinance settings
 TIMEFRAME_MAP = {
     "5 Min": {"yf_interval": "5m", "yf_period": "5d", "tv_interval": "5", "resample": None},
     "15 Min": {"yf_interval": "15m", "yf_period": "1mo", "tv_interval": "15", "resample": None},
@@ -42,7 +60,7 @@ TIMEFRAME_MAP = {
     "1 Month": {"yf_interval": "1mo", "yf_period": "max", "tv_interval": "M", "resample": None}
 }
 
-# 3. Comprehensive Stock Directory
+# Comprehensive Stock Directory
 STOCK_DIRECTORY = {
     "Apple Inc. (AAPL)": "AAPL",
     "Microsoft Corp. (MSFT)": "MSFT",
@@ -59,21 +77,27 @@ STOCK_DIRECTORY = {
     "State Bank of India (SBIN.NS)": "SBIN.NS",
 }
 
-# 4. Sidebar Controls
+# 3. Sidebar Controls
 st.sidebar.header("Configuration")
 
 # Stock Search Selection
 search_query = st.sidebar.selectbox(
     "Search Stock Name or Ticker:",
     options=list(STOCK_DIRECTORY.keys()),
-    index=0
+    index=7  # Change index to 7 (Netflix) by default so you can see it working immediately!
 )
 ticker = STOCK_DIRECTORY[search_query]
 
 # Custom override box
 custom_ticker = st.sidebar.text_input("Or enter any raw ticker symbol manually:")
 if custom_ticker:
-    ticker = custom_ticker.strip().upper()
+    clean_custom = custom_ticker.strip().upper()
+    # Check if they typed a common company name instead of the symbol
+    if clean_custom in COMMON_NAME_TRANSLATOR:
+        ticker = COMMON_NAME_TRANSLATOR[clean_custom]
+        st.sidebar.info(f"Auto-corrected '{custom_ticker}' to official ticker: **{ticker}**")
+    else:
+        ticker = clean_custom
 
 # Timeframe Selector
 selected_tf = st.sidebar.selectbox(
@@ -99,7 +123,6 @@ tab1, tab2 = st.tabs(["📺 Live TradingView Chart", "📊 Python EMA/RSI Signal
 with tab1:
     st.subheader(f"Live {selected_tf} Chart: {tv_symbol}")
     
-    # Embed code with added fallbacks and exact sizing
     tradingview_widget_html = f"""
     <div class="tradingview-widget-container" style="height:600px; width:100%; margin:0 auto;">
       <div id="tradingview_chart" style="height:580px; width:100%;"></div>
@@ -123,7 +146,7 @@ with tab1:
         }});
       }} catch(err) {{
         document.getElementById('tradingview_chart').innerHTML = 
-          "<div style='padding: 20px; color: red;'><b>TradingView Widget Failed to Load.</b><br>Please check your internet connection or disable ad-blockers / Brave Shields.</div>";
+          "<div style='padding: 20px; color: red;'><b>TradingView Widget Failed to Load.</b></div>";
       }}
       </script>
     </div>
@@ -136,7 +159,6 @@ with tab2:
     
     with st.spinner(f"Downloading {selected_tf} data for {ticker}..."):
         try:
-            # Download raw data based on the dynamic timeframe settings
             raw_data = yf.download(
                 ticker, 
                 period=tf_settings['yf_period'], 
@@ -147,7 +169,7 @@ with tab2:
                 raw_data.columns = raw_data.columns.get_level_values(0)
                 
             if raw_data.empty:
-                st.error(f"No data returned for {ticker} using timeframe {selected_tf}.")
+                st.error(f"No data returned for symbol '{ticker}' using {selected_tf} timeframe.")
                 st.stop()
                 
             # Handle 4-Hour resampling if chosen
@@ -163,51 +185,55 @@ with tab2:
                 data = raw_data.copy()
                 
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Error loading yfinance data: {e}")
             st.stop()
 
-    # Calculations
+    # =========================================================================
+    # 1. CALCULATIONS & INDICATORS
+    # =========================================================================
+    
+    # EMAs
     data['EMA_Fast'] = data['Close'].ewm(span=fast_span, adjust=False).mean()
     data['EMA_Slow'] = data['Close'].ewm(span=slow_span, adjust=False).mean()
 
+    # RSI
     delta = data['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
     rs = gain / loss
     data['RSI'] = 100 - (100 / (1 + rs))
 
+    # Average True Range (ATR - 14 Period) for Volatility/Stop Loss
+    high_low = data['High'] - data['Low']
+    high_close = (data['High'] - data['Close'].shift()).abs()
+    low_close = (data['Low'] - data['Close'].shift()).abs()
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    data['ATR'] = ranges.max(axis=1).rolling(window=14).mean()
+
+    # 20-Period Volume Moving Average (to filter low-volume traps)
+    data['Vol_SMA'] = data['Volume'].rolling(window=20).mean()
+
+    # =========================================================================
+    # 2. UPGRADED SIGNAL GENERATION
+    # =========================================================================
     data['Signal'] = 0
-    data.loc[(data['EMA_Fast'] > data['EMA_Slow']) & (data['RSI'] < 70), 'Signal'] = 1
-    data.loc[(data['EMA_Fast'] < data['EMA_Slow']) | (data['RSI'] > 70), 'Signal'] = -1
+    
+    # Strong BUY Condition: 
+    # Fast EMA > Slow EMA AND RSI not overbought (< 70) AND Volume is higher than average
+    data.loc[
+        (data['EMA_Fast'] > data['EMA_Slow']) & 
+        (data['RSI'] < 70) & 
+        (data['Volume'] > data['Vol_SMA']), 
+        'Signal'
+    ] = 1
+    
+    # Strong SELL/EXIT Condition: 
+    # Fast EMA < Slow EMA OR RSI is overbought (> 70)
+    data.loc[
+        (data['EMA_Fast'] < data['EMA_Slow']) | 
+        (data['RSI'] > 70), 
+        'Signal'
+    ] = -1
+    
+    # Capture exactly when the signal flips (Buy/Sell arrows)
     data['Position'] = data['Signal'].diff()
-
-    # Plotting
-    plot_data = data.tail(100)
-    fig, ax = plt.subplots(figsize=(14, 5))
-
-    ax.plot(plot_data['Close'], label='Close Price', color='black', alpha=0.6)
-    ax.plot(plot_data['EMA_Fast'], label=f'{fast_span} EMA', color='blue', linestyle='--')
-    ax.plot(plot_data['EMA_Slow'], label=f'{slow_span} EMA', color='orange', linestyle='--')
-
-    buys = plot_data[plot_data['Position'] == 2]
-    ax.scatter(buys.index, buys['Close'], label='BUY Signal', marker='^', color='green', s=150)
-
-    sells = plot_data[plot_data['Position'] == -2]
-    ax.scatter(sells.index, sells['Close'], label='SELL Signal', marker='v', color='red', s=150)
-
-    ax.set_title(f"{ticker} Signal History ({selected_tf} Chart)")
-    ax.set_xlabel("Date/Time")
-    ax.set_ylabel("Price")
-    ax.legend()
-    ax.grid(True)
-
-    st.pyplot(fig)
-
-    # Metrics
-    col1, col2 = st.columns(2)
-    with col1:
-        last_price = float(data['Close'].iloc[-1])
-        st.metric(label=f"{ticker} Last Price", value=f"{last_price:.2f}")
-    with col2:
-        last_rsi = float(data['RSI'].iloc[-1])
-        st.metric(label="RSI", value=f"{last_rsi:.2f}")
