@@ -203,4 +203,164 @@ with tab2:
             ] = -1
 
         elif strategy_type == "VWAP Pullback":
-            typical_price = (high_series + low_series +
+            typical_price = (high_series + low_series + close_series) / 3
+            tp_vol = typical_price * volume_series
+            dates = data.index.date
+            cum_tp_vol = tp_vol.groupby(dates).cumsum()
+            cum_vol = volume_series.groupby(dates).cumsum()
+            data['VWAP'] = cum_tp_vol / cum_vol
+            
+            data.loc[
+                (close_series > data['VWAP']) & 
+                (close_series.shift(1) <= data['VWAP']) & 
+                (data['RSI'] < rsi_oversold) & 
+                (volume_series > data['Vol_SMA'] * 0.9), 
+                'Signal'
+            ] = 1
+            
+            data.loc[
+                (close_series < data['VWAP']), 
+                'Signal'
+            ] = -1
+
+        else:
+            # EMA Crossover
+            data['EMA_Fast'] = close_series.ewm(span=fast_span, adjust=False).mean()
+            data['EMA_Slow'] = close_series.ewm(span=slow_span, adjust=False).mean()
+            
+            data.loc[
+                (data['EMA_Fast'] > data['EMA_Slow']) & 
+                (data['RSI'] < 70) & 
+                (volume_series > (data['Vol_SMA'] * 0.9)), 
+                'Signal'
+            ] = 1
+            
+            data.loc[
+                (data['EMA_Fast'] < data['EMA_Slow']) | 
+                (data['RSI'] > 70), 
+                'Signal'
+            ] = -1
+
+        # Calculate triggers
+        data['Position'] = data['Signal'].diff()
+
+        # =========================================================================
+        # LIVE SIGNAL ADVISOR MODULE (NEW)
+        # =========================================================================
+        st.markdown("---")
+        st.markdown("### 🚨 Live Signal Advisor")
+        
+        # Determine the status of the absolute last bar in the dataset
+        last_row = data.iloc[-1]
+        last_price = float(close_series.iloc[-1])
+        last_rsi = float(data['RSI'].iloc[-1])
+        last_signal = int(last_row['Signal'])
+        
+        # Calculate ATR for target and stop-loss levels
+        high_low = high_series - low_series
+        high_close = (high_series - close_series.shift()).abs()
+        low_close = (low_series - close_series.shift()).abs()
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        atr_value = float(ranges.max(axis=1).rolling(window=14).mean().iloc[-1])
+
+        # Render Alert box based on current signal
+        col_sig, col_metrics = st.columns([1.5, 2])
+        
+        with col_sig:
+            if last_signal == 1:
+                st.success(f"### 🟢 ACTIVE ACTION: BUY / LONG\n**Price:** ${last_price:.2f} | **RSI:** {last_rsi:.1f}")
+                # ATR Stop-Loss and Target levels
+                stop_loss = last_price - (1.5 * atr_value)
+                target = last_price + (3.0 * atr_value)
+                st.markdown(f"""
+                * **Suggested Entry:** Around `${last_price:.2f}`
+                * **Stop Loss (1.5x ATR):** `${stop_loss:.2f}`
+                * **Profit Target (3x ATR):** `${target:.2f}`
+                """)
+            elif last_signal == -1:
+                st.error(f"### 🔴 ACTIVE ACTION: SELL / SHORT / EXIT\n**Price:** ${last_price:.2f} | **RSI:** {last_rsi:.1f}")
+                stop_loss = last_price + (1.5 * atr_value)
+                target = last_price - (3.0 * atr_value)
+                st.markdown(f"""
+                * **Suggested Entry:** Around `${last_price:.2f}`
+                * **Stop Loss (1.5x ATR):** `${stop_loss:.2f}`
+                * **Profit Target (3x ATR):** `${target:.2f}`
+                """)
+            else:
+                st.info(f"### ⚪ ACTIVE ACTION: HOLD / NO SIGNAL\n**Price:** ${last_price:.2f} | **RSI:** {last_rsi:.1f}")
+                st.write("The strategy parameters are currently neutral. Wait for the next setup crossover or oversold range dip.")
+
+        with col_metrics:
+            c1, c2, c3 = st.columns(3)
+            c1.metric(label="Last Close Price", value=f"${last_price:.2f}")
+            c2.metric(label="Current RSI", value=f"{last_rsi:.1f}")
+            c3.metric(label="ATR (14)", value=f"${atr_value:.2f}")
+
+        # =========================================================================
+        # PLOTTING THE STRATEGY
+        # =========================================================================
+        st.markdown("---")
+        plot_data = data.tail(100)
+        
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+
+        # Subplot 1: Price Chart
+        ax1.plot(plot_data.index, plot_data['Close'], label='Close Price', color='black', alpha=0.7)
+        if strategy_type == "VWAP Pullback" and 'VWAP' in plot_data.columns:
+            ax1.plot(plot_data.index, plot_data['VWAP'], label='VWAP', color='purple', linewidth=2)
+        elif strategy_type == "EMA Crossover" and 'EMA_Fast' in plot_data.columns:
+            ax1.plot(plot_data.index, plot_data['EMA_Fast'], label='Fast EMA', color='blue', linestyle='--')
+            ax1.plot(plot_data.index, plot_data['EMA_Slow'], label='Slow EMA', color='orange', linestyle='--')
+
+        # Plot Buy Arrows
+        buys = plot_data[plot_data['Position'] == 2]
+        if not buys.empty:
+            ax1.scatter(buys.index, buys['Close'], label='BUY Signal', marker='^', color='green', s=200)
+
+        # Plot Sell/Exit Arrows
+        sells = plot_data[plot_data['Position'] == -2]
+        if not sells.empty:
+            ax1.scatter(sells.index, sells['Close'], label='SELL/EXIT', marker='v', color='red', s=200)
+
+        ax1.set_title(f"{ticker} - {strategy_type} ({selected_tf} Chart)")
+        ax1.set_ylabel("Price")
+        ax1.legend()
+        ax1.grid(True)
+
+        # Subplot 2: RSI Chart
+        ax2.plot(plot_data.index, plot_data['RSI'], label='RSI', color='teal', linewidth=1.5)
+        ax2.axhline(70, color='red', linestyle=':', alpha=0.5)
+        ax2.axhline(30, color='green', linestyle=':', alpha=0.5)
+        
+        if strategy_type == "RSI Range Spotter":
+            ax2.axhspan(rsi_min, rsi_max, color='lightgreen', alpha=0.3, label='Buy Zone')
+            
+        ax2.set_ylabel("RSI")
+        ax2.set_ylim(10, 90)
+        ax2.legend()
+        ax2.grid(True)
+
+        st.pyplot(fig)
+
+        # =========================================================================
+        # RECENT TRADES HISTORY LOG (NEW)
+        # =========================================================================
+        st.markdown("### 📜 Recent Signal Execution Logs")
+        
+        # Filter rows where a buy or sell trigger happened
+        history = data[data['Position'].isin([2, -2])].copy()
+        
+        if not history.empty:
+            # Map values to readable words
+            history['Action'] = history['Position'].apply(lambda x: "🟢 BUY / LONG" if x == 2 else "🔴 SELL / EXIT")
+            history['Price'] = history['Close'].round(2)
+            history['RSI_at_Trigger'] = history['RSI'].round(1)
+            
+            # Select relevant columns and display as a table
+            history_display = history[['Action', 'Price', 'RSI_at_Trigger']].tail(5).sort_index(ascending=False)
+            st.dataframe(history_display, use_container_width=True)
+        else:
+            st.info("No signal crossovers found in the loaded historical window. Try adjusting parameters or looking at another timeframe.")
+
+    except Exception as calculation_error:
+        st.error(f"Error calculating strategy: {calculation_error}")
