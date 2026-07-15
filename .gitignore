@@ -1,5 +1,15 @@
-.streamlit/secrets.toml
-.env
+# Python temporary files
 __pycache__/
 *.pyc
-.DS_Store
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE/Editor configs
+.vscode/
+.idea/
+
+# Secret keys (if you add them later)
+.env
