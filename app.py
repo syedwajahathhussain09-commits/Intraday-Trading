@@ -405,17 +405,22 @@ with tab3:
     watchlist_tickers = load_index_tickers(index_selection)
     st.info(f"Loaded **{len(watchlist_tickers)}** tickers for {index_selection}.")
     
-    # Dynamically determine the minimum value for the slider (either 1 or 10, depending on list size)
-slider_min = min(10, len(watchlist_tickers)) if len(watchlist_tickers) > 0 else 1
-
-scan_limit = st.slider(
-    "Limit scan size (Highly recommended to avoid IP ban):", 
-    min_value=slider_min, 
-    max_value=max(1, len(watchlist_tickers)), 
-    value=min(50, len(watchlist_tickers))
-)
+    # --- BULLETPROOF SLIDER FIX ---
+    num_tickers = len(watchlist_tickers)
+    if num_tickers <= 1:
+        # If there is only 0 or 1 ticker, we don't need a slider at all
+        scan_limit = num_tickers
+    else:
+        # Since num_tickers is >= 2, min_value (1) is always strictly less than max_value
+        scan_limit = st.slider(
+            "Limit scan size (Highly recommended to avoid IP ban):", 
+            min_value=1, 
+            max_value=num_tickers, 
+            value=min(50, num_tickers)
+        )
+        
     # Trigger Button
-    if st.button("🚀 Run Live Index Scan"):
+if st.button("🚀 Run Live Index Scan"):
         screener_results = []
         progress_bar = st.progress(0)
         status_text = st.empty()
