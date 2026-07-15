@@ -21,20 +21,18 @@ COMMON_NAME_TRANSLATOR = {
 }
 
 # Helper function to scrape live Index Tickers dynamically
-@st.cache_data(ttl=86400) # Cache index composition for 24 hours to keep page loading super fast
+@st.cache_data(ttl=86400) # Cache lists for 24 hours
 def load_index_tickers(index_name):
     try:
         if index_name == "S&P 500 (US - Mixed)":
             url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
             table = pd.read_html(url, attrs={'id': 'constituents'})[0]
-            # yfinance uses dots instead of dashes for multi-class shares (e.g. BRK.B instead of BRK-B)
             tickers = table['Symbol'].str.replace('.', '-', regex=False).tolist()
             return sorted(tickers)
             
         elif index_name == "NASDAQ 100 (US - Tech)":
             url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
             tables = pd.read_html(url)
-            # Find the constituents table
             for t in tables:
                 if 'Ticker' in t.columns:
                     return sorted(t['Ticker'].tolist())
@@ -45,15 +43,13 @@ def load_index_tickers(index_name):
             tables = pd.read_html(url)
             for t in tables:
                 if 'EPIC' in t.columns:
-                    # LSE tickers on Yahoo Finance need the ".L" suffix
                     return sorted([f"{str(sym).strip()}.L" for sym in t['EPIC'].tolist()])
             return ["SHEL.L", "AZN.L", "HSBA.L", "ULVR.L", "BP.L", "GSK.L", "RIO.L", "LLOY.L"]
 
         else: # Custom Volatile Watchlist
             return ["TSLA", "NVDA", "AAPL", "PLTR", "COIN", "AMD", "NFLX", "MARA", "MU", "RELIANCE.NS", "SBIN.NS"]
     except Exception as e:
-        # Fail-safe backup list if Wikipedia rejects the scraping request
-        st.warning(f"Failed to fetch live {index_name} components from Wikipedia (using backup list): {e}")
+        st.warning(f"Failed to fetch live {index_name} components: {e}")
         return ["TSLA", "NVDA", "AAPL", "MSFT", "AMD", "PLTR", "COIN", "NFLX"]
 
 # Helper function to format tickers for TradingView
@@ -392,8 +388,8 @@ with tab2:
 
 # --- TAB 3: Real-Time Index Screener ---
 with tab3:
-    st.subheader("🔍 Dynamic Global Index Screener")
-    st.write("Scan entire index lists from the NYSE, NASDAQ, and LSE in seconds using dynamically scraped Wikipedia compositions.")
+    st.subheader("🔍 High-Speed Global Index Screener")
+    st.write("Scan entire index lists from the NYSE, NASDAQ, and LSE using multi-threaded backend batching.")
     
     # Selection of which index to scan
     index_selection = st.selectbox(
@@ -405,128 +401,140 @@ with tab3:
     watchlist_tickers = load_index_tickers(index_selection)
     st.info(f"Loaded **{len(watchlist_tickers)}** tickers for {index_selection}.")
     
-    # --- BULLETPROOF SLIDER FIX ---
+    # Dynamic Slider Fix
     num_tickers = len(watchlist_tickers)
-    if num_tickers <= 1:
-        # If there is only 0 or 1 ticker, we don't need a slider at all
-        scan_limit = num_tickers
-    else:
-        # Since num_tickers is >= 2, min_value (1) is always strictly less than max_value
-        scan_limit = st.slider(
-            "Limit scan size (Highly recommended to avoid IP ban):", 
-            min_value=1, 
-            max_value=num_tickers, 
-            value=min(50, num_tickers)
-        )
-        
-    # Trigger Button
-if st.button("🚀 Run Live Index Scan"):
-        screener_results = []
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        # Sub-slice list to keep things within boundaries
-        active_scan_list = watchlist_tickers[:scan_limit]
-        total_tickers = len(active_scan_list)
-        
-        for idx, s_ticker in enumerate(active_scan_list):
-            status_text.text(f"Scanning {s_ticker} ({idx+1}/{total_tickers})...")
-            progress_bar.progress(int((idx + 1) / total_tickers * 100))
+    slider_max = max(1, num_tickers)
+    
+    scan_limit = st.slider(
+        "Limit scan size (Up to maximum watchlist length):", 
+        min_value=0, 
+        max_value=slider_max, 
+        value=min(100, num_tickers) # Default to 100 for high speed
+    )
+    
+    if st.button("🚀 Run Live Index Scan"):
+        if scan_limit == 0:
+            st.warning("Scan limit is set to 0. Please increase the limit to scan stocks.")
+        else:
+            screener_results = []
+            progress_placeholder = st.empty()
+            progress_bar = st.progress(0)
+            
+            # Sub-slice list based on user-selected scan limit
+            active_scan_list = watchlist_tickers[:scan_limit]
+            
+            # =========================================================================
+            # HIGH-SPEED MULTI-THREADED BULK DOWNLOAD
+            # =========================================================================
+            progress_placeholder.text("Initiating high-speed batch download...")
             
             try:
-                # Download data (shorter period to accelerate screening and reduce traffic)
-                s_data = yf.download(
-                    s_ticker, 
-                    period="5d", 
+                # One single, massive parallelized API download request for all tickers!
+                bulk_data = yf.download(
+                    tickers=active_scan_list,
+                    period="5d",
                     interval=tf_settings['yf_interval'],
-                    multi_level_index=False,
+                    group_by='ticker',  # Group everything by individual ticker structures
+                    threads=True,       # ACTIVATE MULTI-THREADING ENGINE
                     progress=False
                 )
                 
-                if s_data.empty:
-                    continue
+                progress_placeholder.text("Processing indicator mathematics across indices...")
+                
+                # Loop through columns and calculate strategy indicators in-memory
+                for idx, s_ticker in enumerate(active_scan_list):
+                    progress_bar.progress(int((idx + 1) / len(active_scan_list) * 100))
                     
-                s_close = s_data['Close'].squeeze()
-                s_high = s_data['High'].squeeze()
-                s_low = s_data['Low'].squeeze()
-                s_volume = s_data['Volume'].squeeze()
-                
-                # Indicator Calculations
-                s_delta = s_close.diff()
-                s_gain = (s_delta.where(s_delta > 0, 0)).rolling(window=rsi_period).mean()
-                s_loss = (-s_delta.where(s_delta < 0, 0)).rolling(window=rsi_period).mean()
-                s_rs = s_gain / s_loss
-                s_rsi = 100 - (100 / (1 + s_rs))
-                
-                s_vol_sma = s_volume.rolling(window=10).mean()
-                
-                current_price = float(s_close.iloc[-1])
-                current_rsi = float(s_rsi.iloc[-1])
-                current_vol = float(s_volume.iloc[-1])
-                current_vol_sma = float(s_vol_sma.iloc[-1])
-                
-                action = "⚪ HOLD / NEUTRAL"
-                
-                # Apply Strategy rules
-                if strategy_type == "RSI Range Spotter":
-                    if (current_rsi >= rsi_min) and (current_rsi <= rsi_max) and (current_vol > current_vol_sma * 0.8):
-                        action = "🟢 BUY (OVERSOLD DIP)"
-                    elif current_rsi > 65:
-                        action = "🔴 SELL (TAKE PROFIT)"
+                    try:
+                        # Extract this specific stock's DataFrame from the bulk download
+                        if len(active_scan_list) > 1:
+                            s_data = bulk_data[s_ticker].dropna()
+                        else:
+                            s_data = bulk_data.dropna()
+                            
+                        if s_data.empty:
+                            continue
                         
-                elif strategy_type == "VWAP Pullback":
-                    typical_price = (s_high + s_low + s_close) / 3
-                    tp_vol = typical_price * s_volume
-                    dates = s_data.index.date
-                    cum_tp_vol = tp_vol.groupby(dates).cumsum()
-                    cum_vol = s_volume.groupby(dates).cumsum()
-                    s_vwap_series = cum_tp_vol / cum_vol
-                    current_vwap = float(s_vwap_series.iloc[-1])
-                    
-                    if (current_price > current_vwap) and (float(s_close.iloc[-2]) <= float(s_vwap_series.iloc[-2])) and (current_rsi < rsi_oversold):
-                        action = "🟢 BUY (VWAP SUPPORT TEST)"
-                    elif current_price < current_vwap:
-                        action = "🔴 SELL (BELLOW VWAP)"
+                        s_close = s_data['Close'].squeeze()
+                        s_high = s_data['High'].squeeze()
+                        s_low = s_data['Low'].squeeze()
+                        s_volume = s_data['Volume'].squeeze()
                         
-                else: # EMA Crossover
-                    s_fast = s_close.ewm(span=fast_span, adjust=False).mean()
-                    s_slow = s_close.ewm(span=slow_span, adjust=False).mean()
-                    
-                    if (float(s_fast.iloc[-1]) > float(s_slow.iloc[-1])) and (current_rsi < 70):
-                        action = "🟢 BUY (EMA GOLDEN CROSS)"
-                    else:
-                        action = "🔴 SELL / NEUTRAL TREND"
+                        # Indicator Calculations
+                        s_delta = s_close.diff()
+                        s_gain = (s_delta.where(s_delta > 0, 0)).rolling(window=rsi_period).mean()
+                        s_loss = (-s_delta.where(s_delta < 0, 0)).rolling(window=rsi_period).mean()
+                        s_rs = s_gain / s_loss
+                        s_rsi = 100 - (100 / (1 + s_rs))
+                        
+                        s_vol_sma = s_volume.rolling(window=10).mean()
+                        
+                        current_price = float(s_close.iloc[-1])
+                        current_rsi = float(s_rsi.iloc[-1])
+                        current_vol = float(s_volume.iloc[-1])
+                        current_vol_sma = float(s_vol_sma.iloc[-1])
+                        
+                        action = "⚪ HOLD / NEUTRAL"
+                        
+                        # Apply Strategy rules
+                        if strategy_type == "RSI Range Spotter":
+                            if (current_rsi >= rsi_min) and (current_rsi <= rsi_max) and (current_vol > current_vol_sma * 0.8):
+                                action = "🟢 BUY (OVERSOLD DIP)"
+                            elif current_rsi > 65:
+                                action = "🔴 SELL (TAKE PROFIT)"
+                                
+                        elif strategy_type == "VWAP Pullback":
+                            typical_price = (s_high + s_low + s_close) / 3
+                            tp_vol = typical_price * s_volume
+                            dates = s_data.index.date
+                            cum_tp_vol = tp_vol.groupby(dates).cumsum()
+                            cum_vol = s_volume.groupby(dates).cumsum()
+                            s_vwap_series = cum_tp_vol / cum_vol
+                            current_vwap = float(s_vwap_series.iloc[-1])
+                            
+                            if (current_price > current_vwap) and (float(s_close.iloc[-2]) <= float(s_vwap_series.iloc[-2])) and (current_rsi < rsi_oversold):
+                                action = "🟢 BUY (VWAP SUPPORT TEST)"
+                            elif current_price < current_vwap:
+                                action = "🔴 SELL (BELLOW VWAP)"
+                                
+                        else: # EMA Crossover
+                            s_fast = s_close.ewm(span=fast_span, adjust=False).mean()
+                            s_slow = s_close.ewm(span=slow_span, adjust=False).mean()
+                            
+                            if (float(s_fast.iloc[-1]) > float(s_slow.iloc[-1])) and (current_rsi < 70):
+                                action = "🟢 BUY (EMA GOLDEN CROSS)"
+                            else:
+                                action = "🔴 SELL / NEUTRAL TREND"
+                        
+                        screener_results.append({
+                            "Stock": s_ticker,
+                            "Current Price": f"${current_price:.2f}" if not s_ticker.endswith(".L") else f"£{current_price/100:.2f}",
+                            "RSI": round(current_rsi, 1),
+                            "Action Status": action,
+                            "Timestamp": str(s_data.index[-1].strftime('%H:%M:%S'))
+                        })
+                        
+                    except Exception:
+                        continue
+                        
+                progress_placeholder.success(f"Successfully scanned {len(screener_results)} stocks!")
                 
-                screener_results.append({
-                    "Stock": s_ticker,
-                    "Current Price": f"${current_price:.2f}" if not s_ticker.endswith(".L") else f"£{current_price/100:.2f}",
-                    "RSI": round(current_rsi, 1),
-                    "Action Status": action,
-                    "Timestamp": str(s_data.index[-1].strftime('%H:%M:%S'))
-                })
-                
-                # Tiny rest limit to avoid triggering anti-bot firewalls
-                time.sleep(0.05)
-                
-            except Exception:
-                # Silently skip failed downloads to keep the scan progressing
-                continue
-                
-        status_text.success("Scan Completed!")
-        
-        # Display Results
-        if screener_results:
-            df_results = pd.DataFrame(screener_results)
+            except Exception as bulk_error:
+                st.error(f"Failed to fetch batch data: {bulk_error}")
             
-            def style_status(val):
-                if "🟢" in val:
-                    return 'background-color: #d4edda; color: #155724; font-weight: bold;'
-                elif "🔴" in val:
-                    return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
-                return 'background-color: #e2e3e5; color: #383d41;'
-            
-            styled_df = df_results.style.map(style_status, subset=['Action Status'])
-            st.dataframe(styled_df, use_container_width=True, height=500)
-            
-        else:
-            st.warning("Scan finished, but no data could be retrieved.")
+            # Display Results
+            if screener_results:
+                df_results = pd.DataFrame(screener_results)
+                
+                def style_status(val):
+                    if "🟢" in val:
+                        return 'background-color: #d4edda; color: #155724; font-weight: bold;'
+                    elif "🔴" in val:
+                        return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
+                    return 'background-color: #e2e3e5; color: #383d41;'
+                
+                styled_df = df_results.style.map(style_status, subset=['Action Status'])
+                st.dataframe(styled_df, use_container_width=True, height=500)
+                
+            else:
+                st.warning("Scan finished, but no matching tickers generated a signal.")
