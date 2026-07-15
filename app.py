@@ -394,8 +394,7 @@ with tab3:
     # Selection of which index to scan
     index_selection = st.selectbox(
         "Select Market Index to Scan:",
-        options=["NASDAQ 100 (US - Tech)", "S&P 500 (US - Mixed)", "FTSE 100 (UK - LSE)", "Volatile Watchlist (Hybrid)"],
-        key="screener_index_selector"  # Distinct key to prevent cross-filtering state bugs
+        options=["NASDAQ 100 (US - Tech)", "S&P 500 (US - Mixed)", "FTSE 100 (UK - LSE)", "Volatile Watchlist (Hybrid)"]
     )
     
     # Load tickers based on choice
@@ -410,7 +409,7 @@ with tab3:
         "Limit scan size (Up to maximum watchlist length):", 
         min_value=0, 
         max_value=slider_max, 
-        value=min(100, num_tickers)
+        value=min(100, num_tickers) # Default to 100 for high speed
     )
     
     if st.button("🚀 Run Live Index Scan"):
@@ -421,33 +420,35 @@ with tab3:
             progress_placeholder = st.empty()
             progress_bar = st.progress(0)
             
-            # Sub-slice the actual dynamically loaded index tickers, NOT your backup list!
-            active_scan_list = list(watchlist_tickers)[:scan_limit]
-            total_tickers = len(active_scan_list)
+            # Sub-slice list based on user-selected scan limit
+            active_scan_list = watchlist_tickers[:scan_limit]
             
+            # =========================================================================
+            # HIGH-SPEED MULTI-THREADED BULK DOWNLOAD
+            # =========================================================================
             progress_placeholder.text("Initiating high-speed batch download...")
             
             try:
-                # 1. Threaded parallel multi-ticker download
+                # One single, massive parallelized API download request for all tickers!
                 bulk_data = yf.download(
                     tickers=active_scan_list,
                     period="5d",
                     interval=tf_settings['yf_interval'],
-                    threads=True,
+                    group_by='ticker',  # Group everything by individual ticker structures
+                    threads=True,       # ACTIVATE MULTI-THREADING ENGINE
                     progress=False
                 )
                 
                 progress_placeholder.text("Processing indicator mathematics across indices...")
                 
-                # 2. Iterate through each parsed ticker and cross-section slice (.xs)
+                # Loop through columns and calculate strategy indicators in-memory
                 for idx, s_ticker in enumerate(active_scan_list):
-                    progress_bar.progress(int((idx + 1) / total_tickers * 100))
+                    progress_bar.progress(int((idx + 1) / len(active_scan_list) * 100))
                     
                     try:
-                        # Slice column elements cross-sectionally for the single ticker
-                        if total_tickers > 1:
-                            # Level 1 represents columns like Close, Open. Level 0 represents the Symbol in multi-ticker downloads
-                            s_data = bulk_data.xs(s_ticker, axis=1, level=1).dropna()
+                        # Extract this specific stock's DataFrame from the bulk download
+                        if len(active_scan_list) > 1:
+                            s_data = bulk_data[s_ticker].dropna()
                         else:
                             s_data = bulk_data.dropna()
                             
@@ -462,4 +463,78 @@ with tab3:
                         # Indicator Calculations
                         s_delta = s_close.diff()
                         s_gain = (s_delta.where(s_delta > 0, 0)).rolling(window=rsi_period).mean()
-                        s_loss = (-s_delta.where(s_delta < 0, 0)).rolling
+                        s_loss = (-s_delta.where(s_delta < 0, 0)).rolling(window=rsi_period).mean()
+                        s_rs = s_gain / s_loss
+                        s_rsi = 100 - (100 / (1 + s_rs))
+                        
+                        s_vol_sma = s_volume.rolling(window=10).mean()
+                        
+                        current_price = float(s_close.iloc[-1])
+                        current_rsi = float(s_rsi.iloc[-1])
+                        current_vol = float(s_volume.iloc[-1])
+                        current_vol_sma = float(s_vol_sma.iloc[-1])
+                        
+                        action = "⚪ HOLD / NEUTRAL"
+                        
+                        # Apply Strategy rules
+                        if strategy_type == "RSI Range Spotter":
+                            if (current_rsi >= rsi_min) and (current_rsi <= rsi_max) and (current_vol > current_vol_sma * 0.8):
+                                action = "🟢 BUY (OVERSOLD DIP)"
+                            elif current_rsi > 65:
+                                action = "🔴 SELL (TAKE PROFIT)"
+                                
+                        elif strategy_type == "VWAP Pullback":
+                            typical_price = (s_high + s_low + s_close) / 3
+                            tp_vol = typical_price * s_volume
+                            dates = s_data.index.date
+                            cum_tp_vol = tp_vol.groupby(dates).cumsum()
+                            cum_vol = s_volume.groupby(dates).cumsum()
+                            s_vwap_series = cum_tp_vol / cum_vol
+                            current_vwap = float(s_vwap_series.iloc[-1])
+                            
+                            if (current_price > current_vwap) and (float(s_close.iloc[-2]) <= float(s_vwap_series.iloc[-2])) and (current_rsi < rsi_oversold):
+                                action = "🟢 BUY (VWAP SUPPORT TEST)"
+                            elif current_price < current_vwap:
+                                action = "🔴 SELL (BELLOW VWAP)"
+                                
+                        else: # EMA Crossover
+                            s_fast = s_close.ewm(span=fast_span, adjust=False).mean()
+                            s_slow = s_close.ewm(span=slow_span, adjust=False).mean()
+                            
+                            if (float(s_fast.iloc[-1]) > float(s_slow.iloc[-1])) and (current_rsi < 70):
+                                action = "🟢 BUY (EMA GOLDEN CROSS)"
+                            else:
+                                action = "🔴 SELL / NEUTRAL TREND"
+                        
+                        screener_results.append({
+                            "Stock": s_ticker,
+                            "Current Price": f"${current_price:.2f}" if not s_ticker.endswith(".L") else f"£{current_price/100:.2f}",
+                            "RSI": round(current_rsi, 1),
+                            "Action Status": action,
+                            "Timestamp": str(s_data.index[-1].strftime('%H:%M:%S'))
+                        })
+                        
+                    except Exception:
+                        continue
+                        
+                progress_placeholder.success(f"Successfully scanned {len(screener_results)} stocks!")
+                
+            except Exception as bulk_error:
+                st.error(f"Failed to fetch batch data: {bulk_error}")
+            
+            # Display Results
+            if screener_results:
+                df_results = pd.DataFrame(screener_results)
+                
+                def style_status(val):
+                    if "🟢" in val:
+                        return 'background-color: #d4edda; color: #155724; font-weight: bold;'
+                    elif "🔴" in val:
+                        return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
+                    return 'background-color: #e2e3e5; color: #383d41;'
+                
+                styled_df = df_results.style.map(style_status, subset=['Action Status'])
+                st.dataframe(styled_df, use_container_width=True, height=500)
+                
+            else:
+                st.warning("Scan finished, but no matching tickers generated a signal.")
