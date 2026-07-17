@@ -292,18 +292,26 @@ with tab2:
 
         data['Position'] = data['Signal'].diff()
 
-        # =========================================================================
-        # LIVE SIGNAL ADVISOR MODULE
+       # =========================================================================
+        # LIVE SIGNAL ADVISOR MODULE (FORCE TRUE REAL-TIME TICK)
         # =========================================================================
         st.markdown("---")
         st.markdown("### 🚨 Live Signal Advisor")
         
+        # 1. Fetch the absolute latest real-time market price instantly
+        try:
+            live_ticker = yf.Ticker(ticker)
+            # fast_info gives us the raw market tick price directly from the exchange stream
+            last_price = float(live_ticker.fast_info['last_price'])
+        except Exception:
+            # Fallback to historical dataframe last close if real-time stream hiccups
+            last_price = float(close_series.iloc[-1])
+            
         last_row = data.iloc[-1]
-        last_price = float(close_series.iloc[-1])
         last_rsi = float(data['RSI'].iloc[-1])
         last_signal = int(last_row['Signal'])
         
-        # ATR Calculation
+        # ATR Calculation for dynamic risk tracking
         high_low = high_series - low_series
         high_close = (high_series - close_series.shift()).abs()
         low_close = (low_series - close_series.shift()).abs()
@@ -314,7 +322,7 @@ with tab2:
         
         with col_sig:
             if last_signal == 1:
-                st.success(f"### 🟢 ACTIVE ACTION: BUY / LONG\n**Price:** ${last_price:.2f} | **RSI:** {last_rsi:.1f}")
+                st.success(f"### 🟢 ACTIVE ACTION: BUY / LONG\n**Live Price:** ${last_price:.2f} | **RSI:** {last_rsi:.1f}")
                 stop_loss = last_price - (1.5 * atr_value)
                 target = last_price + (3.0 * atr_value)
                 st.markdown(f"""
@@ -323,7 +331,7 @@ with tab2:
                 * **Profit Target (3x ATR):** `${target:.2f}`
                 """)
             elif last_signal == -1:
-                st.error(f"### 🔴 ACTIVE ACTION: SELL / SHORT / EXIT\n**Price:** ${last_price:.2f} | **RSI:** {last_rsi:.1f}")
+                st.error(f"### 🔴 ACTIVE ACTION: SELL / SHORT / EXIT\n**Live Price:** ${last_price:.2f} | **RSI:** {last_rsi:.1f}")
                 stop_loss = last_price + (1.5 * atr_value)
                 target = last_price - (3.0 * atr_value)
                 st.markdown(f"""
@@ -332,12 +340,12 @@ with tab2:
                 * **Profit Target (3x ATR):** `${target:.2f}`
                 """)
             else:
-                st.info(f"### ⚪ ACTIVE ACTION: HOLD / NO SIGNAL\n**Price:** ${last_price:.2f} | **RSI:** {last_rsi:.1f}")
+                st.info(f"### ⚪ ACTIVE ACTION: HOLD / NO SIGNAL\n**Live Price:** ${last_price:.2f} | **RSI:** {last_rsi:.1f}")
                 st.write("The strategy parameters are currently neutral. Wait for the next setup crossover or oversold range dip.")
 
         with col_metrics:
             c1, c2, c3 = st.columns(3)
-            c1.metric(label="Last Close Price", value=f"${last_price:.2f}")
+            c1.metric(label="Live Market Price", value=f"${last_price:.2f}")
             c2.metric(label="Current RSI", value=f"{last_rsi:.1f}")
             c3.metric(label="ATR (14)", value=f"${atr_value:.2f}")
 
