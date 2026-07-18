@@ -227,6 +227,62 @@ with tab2:
         high_series = data['High'].squeeze()
         low_series = data['Low'].squeeze()
         volume_series = data['Volume'].squeeze()
+        
+# =========================================================================
+        # AUTOMATIC CANDLESTICK PATTERN DETECTOR
+        # =========================================================================
+        st.markdown("---")
+        st.markdown("### 🕯️ Automatic Candlestick Pattern Recognition")
+        
+        # Calculate candle components
+        body = (close_series - data['Open'].squeeze()).abs()
+        candle_range = high_series - low_series
+        
+        # Avoid division by zero on flat candles
+        candle_range = candle_range.replace(0, 0.00001) 
+        
+        # Define structural components
+        upper_shadow = high_series - data[['Close', 'Open']].max(axis=1).squeeze()
+        lower_shadow = data[['Close', 'Open']].min(axis=1).squeeze() - low_series
+        
+        data['Pattern'] = "⚪ No Pattern"
+        data['Pattern_Signal'] = 0  # 1 for Bullish, -1 for Bearish
+        
+        # 1. Hammer Detection (Bullish Reversal at bottoms)
+        is_hammer = (lower_shadow > (2 * body)) & (upper_shadow < (0.1 * candle_range)) & (data['RSI'] < 40)
+        data.loc[is_hammer, 'Pattern'] = "🟢 BULLISH HAMMER"
+        data.loc[is_hammer, 'Pattern_Signal'] = 1
+        
+        # 2. Shooting Star Detection (Bearish Reversal at tops)
+        is_shooting_star = (upper_shadow > (2 * body)) & (lower_shadow < (0.1 * candle_range)) & (data['RSI'] > 60)
+        data.loc[is_shooting_star, 'Pattern'] = "🔴 BEARISH SHOOTING STAR"
+        data.loc[is_shooting_star, 'Pattern_Signal'] = -1
+        
+        # 3. Engulfing Detection
+        prev_close = close_series.shift(1)
+        prev_open = data['Open'].squeeze().shift(1)
+        curr_close = close_series
+        curr_open = data['Open'].squeeze()
+        
+        is_bullish_engulfing = (prev_close < prev_open) & (curr_close > curr_open) & (curr_open <= prev_close) & (curr_close >= prev_open)
+        is_bearish_engulfing = (prev_close > prev_open) & (curr_close < curr_open) & (curr_open >= prev_close) & (curr_close <= prev_open)
+        
+        data.loc[is_bullish_engulfing, 'Pattern'] = "🟢 BULLISH ENGULFING"
+        data.loc[is_bullish_engulfing, 'Pattern_Signal'] = 1
+        
+        data.loc[is_bearish_engulfing, 'Pattern'] = "🔴 BEARISH ENGULFING"
+        data.loc[is_bearish_engulfing, 'Pattern_Signal'] = -1
+
+        # Display Latest Candle Findings
+        latest_candle = data.iloc[-1]
+        latest_pattern = latest_candle['Pattern']
+        
+        if "🟢" in latest_pattern:
+            st.success(f"**Current Candle Pattern:** {latest_pattern} detected on the {selected_tf} timeframe! Look for Potential Long Entry.")
+        elif "🔴" in latest_pattern:
+            st.error(f"**Current Candle Pattern:** {latest_pattern} detected on the {selected_tf} timeframe! Look for Potential Short/Exit.")
+        else:
+            st.info(f"**Current Candle Pattern:** No clear reversal candlestick pattern formed on the current {selected_tf} bar.")
 
         # Calculate Indicators
         delta = close_series.diff()
