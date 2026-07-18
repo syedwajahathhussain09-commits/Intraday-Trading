@@ -5,7 +5,7 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import time
 import urllib.request
-import io  # <--- ADD THIS LINE HERE
+import io
 
 # 1. Page Configuration
 st.set_page_config(page_title="Global Intraday Screener", layout="wide")
@@ -25,7 +25,6 @@ COMMON_NAME_TRANSLATOR = {
 # Helper function to scrape live Index Tickers dynamically with a browser user-agent
 @st.cache_data(ttl=86400) # Cache lists for 24 hours
 def load_index_tickers(index_name):
-    # Spoof a standard Google Chrome web browser user-agent header
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
     }
@@ -35,7 +34,6 @@ def load_index_tickers(index_name):
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req) as response:
                 html = response.read().decode('utf-8')
-            # io.StringIO forces pandas to treat the text as data instead of a file path
             table = pd.read_html(io.StringIO(html), attrs={'id': 'constituents'})[0]
             tickers = table['Symbol'].str.replace('.', '-', regex=False).tolist()
             return sorted(tickers)
@@ -227,64 +225,8 @@ with tab2:
         high_series = data['High'].squeeze()
         low_series = data['Low'].squeeze()
         volume_series = data['Volume'].squeeze()
-        
-# =========================================================================
-        # AUTOMATIC CANDLESTICK PATTERN DETECTOR
-        # =========================================================================
-        st.markdown("---")
-        st.markdown("### 🕯️ Automatic Candlestick Pattern Recognition")
-        
-        # Calculate candle components
-        body = (close_series - data['Open'].squeeze()).abs()
-        candle_range = high_series - low_series
-        
-        # Avoid division by zero on flat candles
-        candle_range = candle_range.replace(0, 0.00001) 
-        
-        # Define structural components
-        upper_shadow = high_series - data[['Close', 'Open']].max(axis=1).squeeze()
-        lower_shadow = data[['Close', 'Open']].min(axis=1).squeeze() - low_series
-        
-        data['Pattern'] = "⚪ No Pattern"
-        data['Pattern_Signal'] = 0  # 1 for Bullish, -1 for Bearish
-        
-        # 1. Hammer Detection (Bullish Reversal at bottoms)
-        is_hammer = (lower_shadow > (2 * body)) & (upper_shadow < (0.1 * candle_range)) & (data['RSI'] < 40)
-        data.loc[is_hammer, 'Pattern'] = "🟢 BULLISH HAMMER"
-        data.loc[is_hammer, 'Pattern_Signal'] = 1
-        
-        # 2. Shooting Star Detection (Bearish Reversal at tops)
-        is_shooting_star = (upper_shadow > (2 * body)) & (lower_shadow < (0.1 * candle_range)) & (data['RSI'] > 60)
-        data.loc[is_shooting_star, 'Pattern'] = "🔴 BEARISH SHOOTING STAR"
-        data.loc[is_shooting_star, 'Pattern_Signal'] = -1
-        
-        # 3. Engulfing Detection
-        prev_close = close_series.shift(1)
-        prev_open = data['Open'].squeeze().shift(1)
-        curr_close = close_series
-        curr_open = data['Open'].squeeze()
-        
-        is_bullish_engulfing = (prev_close < prev_open) & (curr_close > curr_open) & (curr_open <= prev_close) & (curr_close >= prev_open)
-        is_bearish_engulfing = (prev_close > prev_open) & (curr_close < curr_open) & (curr_open >= prev_close) & (curr_close <= prev_open)
-        
-        data.loc[is_bullish_engulfing, 'Pattern'] = "🟢 BULLISH ENGULFING"
-        data.loc[is_bullish_engulfing, 'Pattern_Signal'] = 1
-        
-        data.loc[is_bearish_engulfing, 'Pattern'] = "🔴 BEARISH ENGULFING"
-        data.loc[is_bearish_engulfing, 'Pattern_Signal'] = -1
 
-        # Display Latest Candle Findings
-        latest_candle = data.iloc[-1]
-        latest_pattern = latest_candle['Pattern']
-        
-        if "🟢" in latest_pattern:
-            st.success(f"**Current Candle Pattern:** {latest_pattern} detected on the {selected_tf} timeframe! Look for Potential Long Entry.")
-        elif "🔴" in latest_pattern:
-            st.error(f"**Current Candle Pattern:** {latest_pattern} detected on the {selected_tf} timeframe! Look for Potential Short/Exit.")
-        else:
-            st.info(f"**Current Candle Pattern:** No clear reversal candlestick pattern formed on the current {selected_tf} bar.")
-
-        # Calculate Indicators
+        # Calculate Basic Indicators
         delta = close_series.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
@@ -294,6 +236,7 @@ with tab2:
         data['Vol_SMA'] = volume_series.rolling(window=10).mean()
         data['Signal'] = 0
 
+        # Run strategies math
         if strategy_type == "RSI Range Spotter":
             data.loc[
                 (data['RSI'] >= rsi_min) & 
@@ -301,11 +244,7 @@ with tab2:
                 (volume_series > (data['Vol_SMA'] * 0.8)), 
                 'Signal'
             ] = 1
-            
-            data.loc[
-                (data['RSI'] > 65), 
-                'Signal'
-            ] = -1
+            data.loc[(data['RSI'] > 65), 'Signal'] = -1
 
         elif strategy_type == "VWAP Pullback":
             typical_price = (high_series + low_series + close_series) / 3
@@ -322,14 +261,9 @@ with tab2:
                 (volume_series > data['Vol_SMA'] * 0.9), 
                 'Signal'
             ] = 1
-            
-            data.loc[
-                (close_series < data['VWAP']), 
-                'Signal'
-            ] = -1
+            data.loc[(close_series < data['VWAP']), 'Signal'] = -1
 
-        else:
-            # EMA Crossover
+        else: # EMA Crossover
             data['EMA_Fast'] = close_series.ewm(span=fast_span, adjust=False).mean()
             data['EMA_Slow'] = close_series.ewm(span=slow_span, adjust=False).mean()
             
@@ -339,35 +273,78 @@ with tab2:
                 (volume_series > (data['Vol_SMA'] * 0.9)), 
                 'Signal'
             ] = 1
-            
-            data.loc[
-                (data['EMA_Fast'] < data['EMA_Slow']) | 
-                (data['RSI'] > 70), 
-                'Signal'
-            ] = -1
+            data.loc[(data['EMA_Fast'] < data['EMA_Slow']) | (data['RSI'] > 70), 'Signal'] = -1
 
         data['Position'] = data['Signal'].diff()
 
-       # =========================================================================
+        # =========================================================================
+        # AUTOMATIC CANDLESTICK PATTERN DETECTOR
+        # =========================================================================
+        st.markdown("---")
+        st.markdown("### 🕯️ Automatic Candlestick Pattern Recognition")
+        
+        body = (close_series - data['Open'].squeeze()).abs()
+        candle_range = high_series - low_series
+        candle_range = candle_range.replace(0, 0.00001) 
+        
+        upper_shadow = high_series - data[['Close', 'Open']].max(axis=1).squeeze()
+        lower_shadow = data[['Close', 'Open']].min(axis=1).squeeze() - low_series
+        
+        data['Pattern'] = "⚪ No Pattern"
+        data['Pattern_Signal'] = 0
+        
+        # 1. Hammer Detection
+        is_hammer = (lower_shadow > (2 * body)) & (upper_shadow < (0.1 * candle_range)) & (data['RSI'] < 40)
+        data.loc[is_hammer, 'Pattern'] = "🟢 BULLISH HAMMER"
+        data.loc[is_hammer, 'Pattern_Signal'] = 1
+        
+        # 2. Shooting Star Detection
+        is_shooting_star = (upper_shadow > (2 * body)) & (lower_shadow < (0.1 * candle_range)) & (data['RSI'] > 60)
+        data.loc[is_shooting_star, 'Pattern'] = "🔴 BEARISH SHOOTING STAR"
+        data.loc[is_shooting_star, 'Pattern_Signal'] = -1
+        
+        # 3. Engulfing Detection
+        prev_close = close_series.shift(1)
+        prev_open = data['Open'].squeeze().shift(1)
+        curr_close = close_series
+        curr_open = data['Open'].squeeze()
+        
+        is_bullish_engulfing = (prev_close < prev_open) & (curr_close > curr_open) & (curr_open <= prev_close) & (curr_close >= prev_open)
+        is_bearish_engulfing = (prev_close > prev_open) & (curr_close < curr_open) & (curr_open >= prev_close) & (curr_close <= prev_open)
+        
+        data.loc[is_bullish_engulfing, 'Pattern'] = "🟢 BULLISH ENGULFING"
+        data.loc[is_bullish_engulfing, 'Pattern_Signal'] = 1
+        data.loc[is_bearish_engulfing, 'Pattern'] = "🔴 BEARISH ENGULFING"
+        data.loc[is_bearish_engulfing, 'Pattern_Signal'] = -1
+
+        # Display Latest Candle Findings
+        latest_candle = data.iloc[-1]
+        latest_pattern = latest_candle['Pattern']
+        
+        if "🟢" in latest_pattern:
+            st.success(f"**Current Candle Pattern:** {latest_pattern} detected on the {selected_tf} timeframe! Look for Potential Long Entry.")
+        elif "🔴" in latest_pattern:
+            st.error(f"**Current Candle Pattern:** {latest_pattern} detected on the {selected_tf} timeframe! Look for Potential Short/Exit.")
+        else:
+            st.info(f"**Current Candle Pattern:** No clear reversal candlestick pattern formed on the current {selected_tf} bar.")
+
+        # =========================================================================
         # LIVE SIGNAL ADVISOR MODULE (FORCE TRUE REAL-TIME TICK)
         # =========================================================================
         st.markdown("---")
         st.markdown("### 🚨 Live Signal Advisor")
         
-        # 1. Fetch the absolute latest real-time market price instantly
         try:
             live_ticker = yf.Ticker(ticker)
-            # fast_info gives us the raw market tick price directly from the exchange stream
             last_price = float(live_ticker.fast_info['last_price'])
         except Exception:
-            # Fallback to historical dataframe last close if real-time stream hiccups
             last_price = float(close_series.iloc[-1])
             
         last_row = data.iloc[-1]
         last_rsi = float(data['RSI'].iloc[-1])
         last_signal = int(last_row['Signal'])
         
-        # ATR Calculation for dynamic risk tracking
+        # ATR Calculation
         high_low = high_series - low_series
         high_close = (high_series - close_series.shift()).abs()
         low_close = (low_series - close_series.shift()).abs()
@@ -472,18 +449,15 @@ with tab3:
     st.subheader("🔍 High-Speed Global Index Screener")
     st.write("Scan entire index lists from the NYSE, NASDAQ, and LSE safely using partitioned batch downloads.")
     
-    # Selection of which index to scan
     index_selection = st.selectbox(
         "Select Market Index to Scan:",
         options=["NASDAQ 100 (US - Tech)", "S&P 500 (US - Mixed)", "FTSE 100 (UK - LSE)", "Volatile Watchlist (Hybrid)"],
         key="screener_index_selector"
     )
     
-    # Load tickers based on choice
     watchlist_tickers = load_index_tickers(index_selection)
     st.info(f"Loaded **{len(watchlist_tickers)}** tickers for {index_selection}.")
     
-    # Dynamic Slider Fix
     num_tickers = len(watchlist_tickers)
     slider_max = max(1, num_tickers)
     
@@ -502,12 +476,11 @@ with tab3:
             progress_placeholder = st.empty()
             progress_bar = st.progress(0)
             
-            # Sub-slice the actual dynamically loaded index tickers
             active_scan_list = list(watchlist_tickers)[:scan_limit]
             total_tickers = len(active_scan_list)
             
-            # --- STABLE BATCH PARTITIONING ---
-            BATCH_SIZE = 10  # Reduced to a highly stable batch size of 10
+            # STABLE BATCH PARTITIONING ENGINE (No Threads to prevent Yahoo cloud block)
+            BATCH_SIZE = 10  
             ticker_batches = [active_scan_list[i:i + BATCH_SIZE] for i in range(0, len(active_scan_list), BATCH_SIZE)]
             total_batches = len(ticker_batches)
             
@@ -517,12 +490,11 @@ with tab3:
                 progress_placeholder.text(f"Downloading batch {batch_idx + 1} of {total_batches} ({len(batch)} symbols)...")
                 
                 try:
-                    # threads=False prevents the multi-threading deadlock that crashes Streamlit
                     bulk_data = yf.download(
                         tickers=batch,
                         period="5d",
                         interval=tf_settings['yf_interval'],
-                        threads=False,   # <--- DISABLED MULTI-THREADING FOR STABILITY
+                        threads=False,   
                         progress=False,
                         timeout=10
                     )
@@ -531,13 +503,11 @@ with tab3:
                         processed_count += len(batch)
                         continue
                         
-                    # Process indicators
                     for s_ticker in batch:
                         processed_count += 1
                         progress_bar.progress(int((processed_count) / total_tickers * 100))
                         
                         try:
-                            # Extract single ticker data
                             if len(batch) > 1:
                                 s_data = bulk_data.xs(s_ticker, axis=1, level=1).dropna()
                             else:
@@ -551,7 +521,7 @@ with tab3:
                             s_low = s_data['Low'].squeeze()
                             s_volume = s_data['Volume'].squeeze()
                             
-                            # Indicator Calculations
+                            # Indicators Math
                             s_delta = s_close.diff()
                             s_gain = (s_delta.where(s_delta > 0, 0)).rolling(window=rsi_period).mean()
                             s_loss = (-s_delta.where(s_delta < 0, 0)).rolling(window=rsi_period).mean()
@@ -567,7 +537,6 @@ with tab3:
                             
                             action = "⚪ HOLD / NEUTRAL"
                             
-                            # Apply Strategy rules
                             if strategy_type == "RSI Range Spotter":
                                 if (current_rsi >= rsi_min) and (current_rsi <= rsi_max) and (current_vol > current_vol_sma * 0.8):
                                     action = "🟢 BUY (OVERSOLD DIP)"
@@ -608,7 +577,6 @@ with tab3:
                         except Exception:
                             continue
                     
-                    # 0.5s pause allows connection sockets to close completely before starting next batch
                     time.sleep(0.5) 
                     
                 except Exception as batch_err:
@@ -617,7 +585,6 @@ with tab3:
                     
             progress_placeholder.success(f"Successfully scanned {len(screener_results)} stocks!")
             
-            # Display Results
             if screener_results:
                 df_results = pd.DataFrame(screener_results)
                 
@@ -630,6 +597,5 @@ with tab3:
                 
                 styled_df = df_results.style.map(style_status, subset=['Action Status'])
                 st.dataframe(styled_df, use_container_width=True, height=500)
-                
             else:
                 st.warning("Scan finished, but no matching tickers generated a signal.")
