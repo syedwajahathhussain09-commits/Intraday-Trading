@@ -145,7 +145,17 @@ tf_settings = TIMEFRAME_MAP[selected_tf]
 st.sidebar.subheader("Strategy Settings")
 rsi_period = st.sidebar.slider("RSI Period", min_value=5, max_value=30, value=14)
 
-if strategy_type == "RSI Range Spotter":
+# Set defaults for EMA spans so they are always defined
+fast_span = 9
+slow_span = 21
+
+if strategy_type == "All-in-One Confluence":
+    st.sidebar.markdown("**Confluence Strategy Controls**")
+    fast_span = st.sidebar.slider("Fast EMA", min_value=3, max_value=20, value=9)
+    slow_span = st.sidebar.slider("Slow EMA", min_value=10, max_value=50, value=21)
+    st.sidebar.info("Uses Price > VWAP, EMA Crossover, and RSI (40-65) for signal confirmation.")
+
+elif strategy_type == "RSI Range Spotter":
     st.sidebar.markdown("**RSI Target Zone (Buy)**")
     rsi_min = st.sidebar.slider("RSI Min Floor", min_value=10, max_value=50, value=30)
     rsi_max = st.sidebar.slider("RSI Max Ceiling", min_value=15, max_value=60, value=35)
