@@ -447,7 +447,128 @@ with tab2:
 # --- TAB 3: Real-Time Index Screener ---
 with tab3:
     st.subheader("🔍 High-Speed Global Index Screener")
-    st.write("Scan entire index lists from the NYSE, NASDAQ, and LSE safely using partitioned batch downloads.")
+    st.write("Scan entire market indices or run an on-demand real-time check on any custom stock symbol.")
+    
+    # Initialize session state storage so data persists when filtering
+    if "scan_results" not in st.session_state:
+        st.session_state.scan_results = None
+
+    # =========================================================================
+    # OPTION A: NEW ON-DEMAND SINGLE STOCK SCANNER
+    # =========================================================================
+    st.markdown("### 🎯 Option 1: Quick Scan a Single Custom Stock")
+    col_search, col_search_btn = st.columns([3, 1])
+    
+    with col_search:
+        single_search_symbol = st.text_input(
+            "Enter raw symbol to scan immediately (e.g. TSLA, INF.L, RELIANCE.NS):", 
+            key="screener_single_symbol_input"
+        ).strip().upper()
+        
+    with col_search_btn:
+        st.write(" ") # Structural alignment padding
+        st.write(" ") 
+        run_single_scan = st.button("🔍 Scan Single Stock")
+
+    if run_single_scan and single_search_symbol:
+        with st.spinner(f"Running high-precision scan for {single_search_symbol}..."):
+            try:
+                # Fetch a short, tight historical window for swift calculations
+                s_data = yf.download(
+                    tickers=single_search_symbol,
+                    period="5d",
+                    interval=tf_settings['yf_interval'],
+                    threads=False,
+                    progress=False
+                )
+                
+                if s_data.empty:
+                    st.error(f"Could not retrieve data for '{single_search_symbol}'. Please verify the ticker format.")
+                else:
+                    s_close = s_data['Close'].squeeze()
+                    s_high = s_data['High'].squeeze()
+                    s_low = s_data['Low'].squeeze()
+                    s_open = s_data['Open'].squeeze()
+                    s_volume = s_data['Volume'].squeeze()
+                    
+                    # Basic calculations
+                    s_delta = s_close.diff()
+                    s_gain = (s_delta.where(s_delta > 0, 0)).rolling(window=rsi_period).mean()
+                    s_loss = (-s_delta.where(s_delta < 0, 0)).rolling(window=rsi_period).mean()
+                    s_rs = s_gain / s_loss
+                    s_rsi = 100 - (100 / (1 + s_rs))
+                    s_vol_sma = s_volume.rolling(window=10).mean()
+                    
+                    current_price = float(s_close.iloc[-1])
+                    current_rsi = float(s_rsi.iloc[-1])
+                    current_vol = float(s_volume.iloc[-1])
+                    current_vol_sma = float(s_vol_sma.iloc[-1])
+                    
+                    # Candlestick framework math
+                    s_body = (s_close - s_open).abs()
+                    s_range = s_high - s_low
+                    s_range = s_range.replace(0, 0.00001)
+                    s_upper_shadow = s_high - s_data[['Close', 'Open']].max(axis=1).squeeze()
+                    s_lower_shadow = s_data[['Close', 'Open']].min(axis=1).squeeze() - s_low
+                    
+                    detected_pattern = "⚪ No Pattern"
+                    if (s_lower_shadow.iloc[-1] > (2 * s_body.iloc[-1])) and (s_upper_shadow.iloc[-1] < (0.1 * s_range.iloc[-1])) and (current_rsi < 40):
+                        detected_pattern = "🟢 BULLISH HAMMER"
+                    elif (s_upper_shadow.iloc[-1] > (2 * s_body.iloc[-1])) and (s_lower_shadow.iloc[-1] < (0.1 * s_range.iloc[-1])) and (current_rsi > 60):
+                        detected_pattern = "🔴 BEARISH SHOOTING STAR"
+                    else:
+                        p_close, p_open = s_close.iloc[-2], s_open.iloc[-2]
+                        c_close, c_open = s_close.iloc[-1], s_open.iloc[-1]
+                        if (p_close < p_open) and (c_close > c_open) and (c_open <= p_close) and (c_close >= p_open):
+                            detected_pattern = "🟢 BULLISH ENGULFING"
+                        elif (p_close > p_open) and (c_close < c_open) and (c_open >= p_close) and (c_close <= p_open):
+                            detected_pattern = "🔴 BEARISH ENGULFING"
+                    
+                    # Strategy routing signals
+                    action = "⚪ HOLD / NEUTRAL"
+                    if strategy_type == "RSI Range Spotter":
+                        if (current_rsi >= rsi_min) and (current_rsi <= rsi_max) and (current_vol > current_vol_sma * 0.8):
+                            action = "🟢 STRATEGY BUY"
+                        elif current_rsi > 65:
+                            action = "🔴 STRATEGY SELL"
+                    elif strategy_type == "VWAP Pullback":
+                        typical_price = (s_high + s_low + s_close) / 3
+                        tp_vol = typical_price * s_volume
+                        dates = s_data.index.date
+                        cum_tp_vol = tp_vol.groupby(dates).cumsum()
+                        cum_vol = s_volume.groupby(dates).cumsum()
+                        s_vwap_series = cum_tp_vol / cum_vol
+                        current_vwap = float(s_vwap_series.iloc[-1])
+                        if (current_price > current_vwap) and (float(s_close.iloc[-2]) <= float(s_vwap_series.iloc[-2])) and (current_rsi < rsi_oversold):
+                            action = "🟢 STRATEGY BUY"
+                        elif current_price < current_vwap:
+                            action = "🔴 STRATEGY SELL"
+                    else: # EMA Crossover
+                        s_fast = s_close.ewm(span=fast_span, adjust=False).mean()
+                        s_slow = s_close.ewm(span=slow_span, adjust=False).mean()
+                        if (float(s_fast.iloc[-1]) > float(s_slow.iloc[-1])) and (current_rsi < 70):
+                            action = "🟢 STRATEGY BUY"
+                        else:
+                            action = "🔴 STRATEGY SELL"
+                    
+                    # Update Session State with just this single row to override table view
+                    st.session_state.scan_results = [{
+                        "Stock": single_search_symbol,
+                        "Current Price": f"${current_price:.2f}" if not single_search_symbol.endswith(".L") else f"£{current_price/100:.2f}",
+                        "RSI": round(current_rsi, 1),
+                        "Candle Pattern": detected_pattern,
+                        "Strategy Signal": action,
+                        "Timestamp": str(s_data.index[-1].strftime('%H:%M:%S'))
+                    }]
+                    st.success(f"Single stock analysis completed for {single_search_symbol}!")
+            except Exception as single_err:
+                st.error(f"Error executing custom stock lookup: {single_err}")
+
+    # =========================================================================
+    # OPTION B: ORIGINAL INDEX BATCH SCREENER
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("### 📊 Option 2: Full Market Index / Watchlist Scan")
     
     index_selection = st.selectbox(
         "Select Market Index to Scan:",
@@ -521,7 +642,6 @@ with tab3:
                             s_open = s_data['Open'].squeeze()
                             s_volume = s_data['Volume'].squeeze()
                             
-                            # Standard Strategy Indicators Math
                             s_delta = s_close.diff()
                             s_gain = (s_delta.where(s_delta > 0, 0)).rolling(window=rsi_period).mean()
                             s_loss = (-s_delta.where(s_delta < 0, 0)).rolling(window=rsi_period).mean()
@@ -534,43 +654,31 @@ with tab3:
                             current_vol = float(s_volume.iloc[-1])
                             current_vol_sma = float(s_vol_sma.iloc[-1])
                             
-                            # --- SCREENER CANDLESTICK PATTERN MATH ---
                             s_body = (s_close - s_open).abs()
                             s_range = s_high - s_low
                             s_range = s_range.replace(0, 0.00001)
-                            
                             s_upper_shadow = s_high - s_data[['Close', 'Open']].max(axis=1).squeeze()
                             s_lower_shadow = s_data[['Close', 'Open']].min(axis=1).squeeze() - s_low
                             
                             detected_pattern = "⚪ No Pattern"
-                            
-                            # 1. Hammer Detection
                             if (s_lower_shadow.iloc[-1] > (2 * s_body.iloc[-1])) and (s_upper_shadow.iloc[-1] < (0.1 * s_range.iloc[-1])) and (current_rsi < 40):
                                 detected_pattern = "🟢 BULLISH HAMMER"
-                            
-                            # 2. Shooting Star Detection
                             elif (s_upper_shadow.iloc[-1] > (2 * s_body.iloc[-1])) and (s_lower_shadow.iloc[-1] < (0.1 * s_range.iloc[-1])) and (current_rsi > 60):
                                 detected_pattern = "🔴 BEARISH SHOOTING STAR"
-                            
-                            # 3. Engulfing Detection
                             else:
                                 p_close, p_open = s_close.iloc[-2], s_open.iloc[-2]
                                 c_close, c_open = s_close.iloc[-1], s_open.iloc[-1]
-                                
                                 if (p_close < p_open) and (c_close > c_open) and (c_open <= p_close) and (c_close >= p_open):
                                     detected_pattern = "🟢 BULLISH ENGULFING"
                                 elif (p_close > p_open) and (c_close < c_open) and (c_open >= p_close) and (c_close <= p_open):
                                     detected_pattern = "🔴 BEARISH ENGULFING"
                             
-                            # --- STRATEGY SIGNAL MATCHING ---
                             action = "⚪ HOLD / NEUTRAL"
-                            
                             if strategy_type == "RSI Range Spotter":
                                 if (current_rsi >= rsi_min) and (current_rsi <= rsi_max) and (current_vol > current_vol_sma * 0.8):
                                     action = "🟢 STRATEGY BUY"
                                 elif current_rsi > 65:
                                     action = "🔴 STRATEGY SELL"
-                                    
                             elif strategy_type == "VWAP Pullback":
                                 typical_price = (s_high + s_low + s_close) / 3
                                 tp_vol = typical_price * s_volume
@@ -579,16 +687,13 @@ with tab3:
                                 cum_vol = s_volume.groupby(dates).cumsum()
                                 s_vwap_series = cum_tp_vol / cum_vol
                                 current_vwap = float(s_vwap_series.iloc[-1])
-                                
                                 if (current_price > current_vwap) and (float(s_close.iloc[-2]) <= float(s_vwap_series.iloc[-2])) and (current_rsi < rsi_oversold):
                                     action = "🟢 STRATEGY BUY"
                                 elif current_price < current_vwap:
                                     action = "🔴 STRATEGY SELL"
-                                    
-                            else: # EMA Crossover
+                            else: 
                                 s_fast = s_close.ewm(span=fast_span, adjust=False).mean()
                                 s_slow = s_close.ewm(span=slow_span, adjust=False).mean()
-                                
                                 if (float(s_fast.iloc[-1]) > float(s_slow.iloc[-1])) and (current_rsi < 70):
                                     action = "🟢 STRATEGY BUY"
                                 else:
@@ -605,57 +710,37 @@ with tab3:
                             
                         except Exception:
                             continue
-                    
                     time.sleep(0.5) 
-                    
-                except Exception as batch_err:
+                except Exception:
                     processed_count += len(batch)
                     continue
                     
             progress_placeholder.success(f"Successfully scanned {len(screener_results)} stocks!")
-            
-            if screener_results:
-                df_results = pd.DataFrame(screener_results)
-                
-                # Dynamic cell styling logic for multiple outcome columns
-                def style_status(val):
-                    if "🟢" in str(val):
-                        return 'background-color: #d4edda; color: #155724; font-weight: bold;'
-                    elif "🔴" in str(val):
-                        return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
-                    return 'background-color: #e2e3e5; color: #383d41;'
-                
-                styled_df = df_results.style.map(style_status, subset=['Candle Pattern', 'Strategy Signal'])
-                st.dataframe(styled_df, use_container_width=True, height=500)
-            else:
-                st.warning("Scan finished, but no matching tickers generated a data window.")
-                # Display Results
-            if screener_results:
-                df_results = pd.DataFrame(screener_results)
-                
-                # --- ADDED SEARCH/FILTER INPUT BOX ---
-                st.markdown("---")
-                st.subheader("🎯 Filter Scanned Results")
-                search_filter = st.text_input("Type a ticker symbol or pattern name to filter table instantly:", "").strip().upper()
-                
-                # Apply filter if the user typed something
-                if search_filter:
-                    # Filters rows if the text matches 'Stock', 'Candle Pattern', or 'Strategy Signal' columns
-                    df_results = df_results[
-                        df_results['Stock'].str.contains(search_filter, case=False, na=False) |
-                        df_results['Candle Pattern'].str.contains(search_filter, case=False, na=False) |
-                        df_results['Strategy Signal'].str.contains(search_filter, case=False, na=False)
-                    ]
-                
-                # Dynamic cell styling logic for multiple outcome columns
-                def style_status(val):
-                    if "🟢" in str(val):
-                        return 'background-color: #d4edda; color: #155724; font-weight: bold;'
-                    elif "🔴" in str(val):
-                        return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
-                    return 'background-color: #e2e3e5; color: #383d41;'
-                
-                styled_df = df_results.style.map(style_status, subset=['Candle Pattern', 'Strategy Signal'])
-                st.dataframe(styled_df, use_container_width=True, height=500)
-            else:
-                st.warning("Scan finished, but no matching tickers generated a data window.")
+            st.session_state.scan_results = screener_results
+
+    # =========================================================================
+    # RENDER DATA & APPLY FILTER CODES
+    # =========================================================================
+    if st.session_state.scan_results is not None:
+        df_results = pd.DataFrame(st.session_state.scan_results)
+        
+        st.markdown("---")
+        st.subheader("🎯 Filter Displayed Table Results")
+        search_filter = st.text_input("Type a string to instantly filter columns below:", key="live_table_search_box").strip().upper()
+        
+        if search_filter:
+            df_results = df_results[
+                df_results['Stock'].str.contains(search_filter, case=False, na=False) |
+                df_results['Candle Pattern'].str.contains(search_filter, case=False, na=False) |
+                df_results['Strategy Signal'].str.contains(search_filter, case=False, na=False)
+            ]
+        
+        def style_status(val):
+            if "🟢" in str(val):
+                return 'background-color: #d4edda; color: #155724; font-weight: bold;'
+            elif "🔴" in str(val):
+                return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
+            return 'background-color: #e2e3e5; color: #383d41;'
+        
+        styled_df = df_results.style.map(style_status, subset=['Candle Pattern', 'Strategy Signal'])
+        st.dataframe(styled_df, use_container_width=True, height=500)
