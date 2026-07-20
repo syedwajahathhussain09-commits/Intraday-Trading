@@ -629,3 +629,33 @@ with tab3:
                 st.dataframe(styled_df, use_container_width=True, height=500)
             else:
                 st.warning("Scan finished, but no matching tickers generated a data window.")
+                # Display Results
+            if screener_results:
+                df_results = pd.DataFrame(screener_results)
+                
+                # --- ADDED SEARCH/FILTER INPUT BOX ---
+                st.markdown("---")
+                st.subheader("🎯 Filter Scanned Results")
+                search_filter = st.text_input("Type a ticker symbol or pattern name to filter table instantly:", "").strip().upper()
+                
+                # Apply filter if the user typed something
+                if search_filter:
+                    # Filters rows if the text matches 'Stock', 'Candle Pattern', or 'Strategy Signal' columns
+                    df_results = df_results[
+                        df_results['Stock'].str.contains(search_filter, case=False, na=False) |
+                        df_results['Candle Pattern'].str.contains(search_filter, case=False, na=False) |
+                        df_results['Strategy Signal'].str.contains(search_filter, case=False, na=False)
+                    ]
+                
+                # Dynamic cell styling logic for multiple outcome columns
+                def style_status(val):
+                    if "🟢" in str(val):
+                        return 'background-color: #d4edda; color: #155724; font-weight: bold;'
+                    elif "🔴" in str(val):
+                        return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
+                    return 'background-color: #e2e3e5; color: #383d41;'
+                
+                styled_df = df_results.style.map(style_status, subset=['Candle Pattern', 'Strategy Signal'])
+                st.dataframe(styled_df, use_container_width=True, height=500)
+            else:
+                st.warning("Scan finished, but no matching tickers generated a data window.")
