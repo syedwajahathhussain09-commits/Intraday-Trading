@@ -113,7 +113,7 @@ st.sidebar.header("Configuration")
 # 1. Strategy Selector
 strategy_type = st.sidebar.selectbox(
     "Choose Strategy:",
-    options=["RSI Range Spotter", "VWAP Pullback", "EMA Crossover"]
+    options=["All-in-One Confluence", "RSI Range Spotter", "VWAP Pullback", "EMA Crossover"]
 )
 
 # 2. Stock Selection (For Tab 1 & Tab 2)
@@ -235,9 +235,50 @@ with tab2:
         
         data['Vol_SMA'] = volume_series.rolling(window=10).mean()
         data['Signal'] = 0
+        
+# Calculate Basic Indicators
+        delta = close_series.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
+        rs = gain / loss
+        data['RSI'] = 100 - (100 / (1 + rs))
+        
+        data['Vol_SMA'] = volume_series.rolling(window=10).mean()
+        data['Signal'] = 0
 
-        # Run strategies math
-        if strategy_type == "RSI Range Spotter":
+        # Calculate Common Moving Averages & VWAP for Confluence Check
+        data['EMA_Fast'] = close_series.ewm(span=fast_span, adjust=False).mean()
+        data['EMA_Slow'] = close_series.ewm(span=slow_span, adjust=False).mean()
+        
+        typical_price = (high_series + low_series + close_series) / 3
+        tp_vol = typical_price * volume_series
+        dates = data.index.date
+        cum_tp_vol = tp_vol.groupby(dates).cumsum()
+        cum_vol = volume_series.groupby(dates).cumsum()
+        data['VWAP'] = cum_tp_vol / cum_vol
+
+        # =========================================================================
+        # STRATEGY SIGNAL ROUTING (ADD ALL-IN-ONE CONFLUENCE RIGHT HERE)
+        # =========================================================================
+        if strategy_type == "All-in-One Confluence":
+            # 1. Buy when: EMA Fast > Slow + Price > VWAP + Healthy RSI (40-65) + Above Average Volume
+            data.loc[
+                (data['EMA_Fast'] > data['EMA_Slow']) & 
+                (close_series > data['VWAP']) & 
+                (data['RSI'] >= 40) & (data['RSI'] <= 65) &
+                (volume_series > (data['Vol_SMA'] * 0.8)), 
+                'Signal'
+            ] = 1
+            
+            # 2. Sell / Exit when: EMA Fast drops below Slow OR Price drops below VWAP OR RSI overbought (> 70)
+            data.loc[
+                (data['EMA_Fast'] < data['EMA_Slow']) | 
+                (close_series < data['VWAP']) | 
+                (data['RSI'] > 70), 
+                'Signal'
+            ] = -1
+
+        elif strategy_type == "RSI Range Spotter":
             data.loc[
                 (data['RSI'] >= rsi_min) & 
                 (data['RSI'] <= rsi_max) & 
@@ -247,13 +288,6 @@ with tab2:
             data.loc[(data['RSI'] > 65), 'Signal'] = -1
 
         elif strategy_type == "VWAP Pullback":
-            typical_price = (high_series + low_series + close_series) / 3
-            tp_vol = typical_price * volume_series
-            dates = data.index.date
-            cum_tp_vol = tp_vol.groupby(dates).cumsum()
-            cum_vol = volume_series.groupby(dates).cumsum()
-            data['VWAP'] = cum_tp_vol / cum_vol
-            
             data.loc[
                 (close_series > data['VWAP']) & 
                 (close_series.shift(1) <= data['VWAP']) & 
@@ -264,9 +298,6 @@ with tab2:
             data.loc[(close_series < data['VWAP']), 'Signal'] = -1
 
         else: # EMA Crossover
-            data['EMA_Fast'] = close_series.ewm(span=fast_span, adjust=False).mean()
-            data['EMA_Slow'] = close_series.ewm(span=slow_span, adjust=False).mean()
-            
             data.loc[
                 (data['EMA_Fast'] > data['EMA_Slow']) & 
                 (data['RSI'] < 70) & 
@@ -390,10 +421,11 @@ with tab2:
         
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
 
-        ax1.plot(plot_data.index, plot_data['Close'], label='Close Price', color='black', alpha=0.7)
-        if strategy_type == "VWAP Pullback" and 'VWAP' in plot_data.columns:
+        # Update this line inside the plotting section:
+        if strategy_type in ["VWAP Pullback", "All-in-One Confluence"] and 'VWAP' in plot_data.columns:
             ax1.plot(plot_data.index, plot_data['VWAP'], label='VWAP', color='purple', linewidth=2)
-        elif strategy_type == "EMA Crossover" and 'EMA_Fast' in plot_data.columns:
+            
+        if strategy_type in ["EMA Crossover", "All-in-One Confluence"] and 'EMA_Fast' in plot_data.columns:
             ax1.plot(plot_data.index, plot_data['EMA_Fast'], label='Fast EMA', color='blue', linestyle='--')
             ax1.plot(plot_data.index, plot_data['EMA_Slow'], label='Slow EMA', color='orange', linestyle='--')
 
