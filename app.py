@@ -479,7 +479,6 @@ with tab3:
             active_scan_list = list(watchlist_tickers)[:scan_limit]
             total_tickers = len(active_scan_list)
             
-            # STABLE BATCH PARTITIONING ENGINE (No Threads to prevent Yahoo cloud block)
             BATCH_SIZE = 10  
             ticker_batches = [active_scan_list[i:i + BATCH_SIZE] for i in range(0, len(active_scan_list), BATCH_SIZE)]
             total_batches = len(ticker_batches)
@@ -519,15 +518,15 @@ with tab3:
                             s_close = s_data['Close'].squeeze()
                             s_high = s_data['High'].squeeze()
                             s_low = s_data['Low'].squeeze()
+                            s_open = s_data['Open'].squeeze()
                             s_volume = s_data['Volume'].squeeze()
                             
-                            # Indicators Math
+                            # Standard Strategy Indicators Math
                             s_delta = s_close.diff()
                             s_gain = (s_delta.where(s_delta > 0, 0)).rolling(window=rsi_period).mean()
                             s_loss = (-s_delta.where(s_delta < 0, 0)).rolling(window=rsi_period).mean()
                             s_rs = s_gain / s_loss
                             s_rsi = 100 - (100 / (1 + s_rs))
-                            
                             s_vol_sma = s_volume.rolling(window=10).mean()
                             
                             current_price = float(s_close.iloc[-1])
@@ -535,13 +534,42 @@ with tab3:
                             current_vol = float(s_volume.iloc[-1])
                             current_vol_sma = float(s_vol_sma.iloc[-1])
                             
+                            # --- SCREENER CANDLESTICK PATTERN MATH ---
+                            s_body = (s_close - s_open).abs()
+                            s_range = s_high - s_low
+                            s_range = s_range.replace(0, 0.00001)
+                            
+                            s_upper_shadow = s_high - s_data[['Close', 'Open']].max(axis=1).squeeze()
+                            s_lower_shadow = s_data[['Close', 'Open']].min(axis=1).squeeze() - s_low
+                            
+                            detected_pattern = "⚪ No Pattern"
+                            
+                            # 1. Hammer Detection
+                            if (s_lower_shadow.iloc[-1] > (2 * s_body.iloc[-1])) and (s_upper_shadow.iloc[-1] < (0.1 * s_range.iloc[-1])) and (current_rsi < 40):
+                                detected_pattern = "🟢 BULLISH HAMMER"
+                            
+                            # 2. Shooting Star Detection
+                            elif (s_upper_shadow.iloc[-1] > (2 * s_body.iloc[-1])) and (s_lower_shadow.iloc[-1] < (0.1 * s_range.iloc[-1])) and (current_rsi > 60):
+                                detected_pattern = "🔴 BEARISH SHOOTING STAR"
+                            
+                            # 3. Engulfing Detection
+                            else:
+                                p_close, p_open = s_close.iloc[-2], s_open.iloc[-2]
+                                c_close, c_open = s_close.iloc[-1], s_open.iloc[-1]
+                                
+                                if (p_close < p_open) and (c_close > c_open) and (c_open <= p_close) and (c_close >= p_open):
+                                    detected_pattern = "🟢 BULLISH ENGULFING"
+                                elif (p_close > p_open) and (c_close < c_open) and (c_open >= p_close) and (c_close <= p_open):
+                                    detected_pattern = "🔴 BEARISH ENGULFING"
+                            
+                            # --- STRATEGY SIGNAL MATCHING ---
                             action = "⚪ HOLD / NEUTRAL"
                             
                             if strategy_type == "RSI Range Spotter":
                                 if (current_rsi >= rsi_min) and (current_rsi <= rsi_max) and (current_vol > current_vol_sma * 0.8):
-                                    action = "🟢 BUY (OVERSOLD DIP)"
+                                    action = "🟢 STRATEGY BUY"
                                 elif current_rsi > 65:
-                                    action = "🔴 SELL (TAKE PROFIT)"
+                                    action = "🔴 STRATEGY SELL"
                                     
                             elif strategy_type == "VWAP Pullback":
                                 typical_price = (s_high + s_low + s_close) / 3
@@ -553,24 +581,25 @@ with tab3:
                                 current_vwap = float(s_vwap_series.iloc[-1])
                                 
                                 if (current_price > current_vwap) and (float(s_close.iloc[-2]) <= float(s_vwap_series.iloc[-2])) and (current_rsi < rsi_oversold):
-                                    action = "🟢 BUY (VWAP SUPPORT TEST)"
+                                    action = "🟢 STRATEGY BUY"
                                 elif current_price < current_vwap:
-                                    action = "🔴 SELL (BELLOW VWAP)"
+                                    action = "🔴 STRATEGY SELL"
                                     
                             else: # EMA Crossover
                                 s_fast = s_close.ewm(span=fast_span, adjust=False).mean()
                                 s_slow = s_close.ewm(span=slow_span, adjust=False).mean()
                                 
                                 if (float(s_fast.iloc[-1]) > float(s_slow.iloc[-1])) and (current_rsi < 70):
-                                    action = "🟢 BUY (EMA GOLDEN CROSS)"
+                                    action = "🟢 STRATEGY BUY"
                                 else:
-                                    action = "🔴 SELL / NEUTRAL TREND"
+                                    action = "🔴 STRATEGY SELL"
                             
                             screener_results.append({
                                 "Stock": s_ticker,
                                 "Current Price": f"${current_price:.2f}" if not s_ticker.endswith(".L") else f"£{current_price/100:.2f}",
                                 "RSI": round(current_rsi, 1),
-                                "Action Status": action,
+                                "Candle Pattern": detected_pattern,
+                                "Strategy Signal": action,
                                 "Timestamp": str(s_data.index[-1].strftime('%H:%M:%S'))
                             })
                             
@@ -588,14 +617,15 @@ with tab3:
             if screener_results:
                 df_results = pd.DataFrame(screener_results)
                 
+                # Dynamic cell styling logic for multiple outcome columns
                 def style_status(val):
-                    if "🟢" in val:
+                    if "🟢" in str(val):
                         return 'background-color: #d4edda; color: #155724; font-weight: bold;'
-                    elif "🔴" in val:
+                    elif "🔴" in str(val):
                         return 'background-color: #f8d7da; color: #721c24; font-weight: bold;'
                     return 'background-color: #e2e3e5; color: #383d41;'
                 
-                styled_df = df_results.style.map(style_status, subset=['Action Status'])
+                styled_df = df_results.style.map(style_status, subset=['Candle Pattern', 'Strategy Signal'])
                 st.dataframe(styled_df, use_container_width=True, height=500)
             else:
-                st.warning("Scan finished, but no matching tickers generated a signal.")
+                st.warning("Scan finished, but no matching tickers generated a data window.")
