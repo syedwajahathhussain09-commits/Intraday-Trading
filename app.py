@@ -180,11 +180,11 @@ tv_symbol = format_tv_symbol(ticker)
 # Create Tabs
 tab1, tab2, tab3 = st.tabs(["📺 Live TradingView Chart", "📊 Python Strategy Signals", "🔍 Real-Time Index Screener"])
 
-# --- TAB 1: Live Interactive TradingView Chart ---
+## --- TAB 1: Live Interactive TradingView Chart ---
 with tab1:
     st.subheader(f"Live {selected_tf} Chart: {tv_symbol}")
     
-   tradingview_widget_html = f"""
+    tradingview_widget_html = f"""
     <div class="tradingview-widget-container" style="height:600px; width:100%; margin:0 auto;">
       <div id="tradingview_chart" style="height:580px; width:100%;"></div>
       <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
@@ -203,7 +203,7 @@ with tab1:
           "enable_publishing": false,
           "hide_side_toolbar": false,
           "allow_symbol_change": true,
-          "extended_hours": true,  /* <--- ENABLES PRE/POST MARKET CANDLES IN CHART */
+          "extended_hours": true,
           "container_id": "tradingview_chart"
         }});
       }} catch(err) {{
@@ -214,6 +214,7 @@ with tab1:
     </div>
     """
     components.html(tradingview_widget_html, height=600)
+    
 
 # --- TAB 2: Custom Strategy Backtest Signals ---
 with tab2:
