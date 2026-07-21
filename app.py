@@ -468,6 +468,23 @@ with tab2:
 
         formatted_total_vol = format_vol(total_session_vol)
         formatted_bar_vol = format_vol(last_bar_vol)
+        
+        # --- PRE / POST MARKET VOLUME SURGE DETECTOR ---
+        last_vol = float(volume_series.iloc[-1])
+        vol_avg = float(data['Vol_SMA'].iloc[-1])
+        
+        # Calculate volume surge ratio
+        vol_ratio = last_vol / vol_avg if vol_avg > 0 else 1.0
+        
+        # Detect extended-hours bar timestamp
+        last_bar_time = data.index[-1]
+        is_extended_hours = (last_bar_time.hour < 9 or (last_bar_time.hour == 9 and last_bar_time.minute < 30)) or (last_bar_time.hour >= 16)
+        
+        # Surge alert banner
+        if is_extended_hours and vol_ratio >= 2.0:
+            st.warning(f"⚡ **EXTENDED HOURS VOLUME SURGE DETECTED!** Latest volume is **{vol_ratio:.1f}x** higher than average ({formatted_bar_vol} vs avg {format_vol(vol_avg)}).")
+        elif vol_ratio >= 2.5:
+            st.info(f"🔥 **HIGH VOLUME SPIKE:** Trading volume is **{vol_ratio:.1f}x** above the 10-period moving average.")
 
         # --- UPDATE METRIC CARDS ---
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
@@ -836,15 +853,26 @@ with tab3:
                                 else:
                                     action = "🔴 STRATEGY SELL"
                             
-                            screener_results.append({
-                                "Stock": s_ticker,
-                                "Current Price": f"${current_price:.2f}" if not s_ticker.endswith(".L") else f"£{current_price/100:.2f}",
-                                "Volume": vol_str,
-                                "RSI": round(current_rsi, 1),
-                                "Candle Pattern": detected_pattern,
-                                "Strategy Signal": action,
-                                "Timestamp": str(s_data.index[-1].strftime('%H:%M:%S'))
-                            })
+                                # 1. Calculate Volume Surge Ratio
+                                vol_surge_ratio = current_vol / current_vol_sma if current_vol_sma > 0 else 1.0
+                                if vol_surge_ratio >= 2.0:
+                                    vol_alert = f"⚡ SURGE ({vol_surge_ratio:.1f}x)"
+                                elif vol_surge_ratio >= 1.5:
+                                    vol_alert = f"🔥 HIGH ({vol_surge_ratio:.1f}x)"
+                                else:
+                                    vol_alert = "⚪ NORMAL"
+
+                                # 2. Append to screener_results with the new 'Volume Alert' column
+                                screener_results.append({
+                                    "Stock": s_ticker,
+                                    "Current Price": f"${current_price:.2f}" if not s_ticker.endswith(".L") else f"£{current_price/100:.2f}",
+                                    "Volume": vol_str,
+                                    "Volume Alert": vol_alert,  # <--- NEW COLUMN ADDED HERE
+                                    "RSI": round(current_rsi, 1),
+                                    "Candle Pattern": detected_pattern,
+                                    "Strategy Signal": action,
+                                    "Timestamp": str(s_data.index[-1].strftime('%H:%M:%S'))
+                                })
                             
                         except Exception:
                             continue
