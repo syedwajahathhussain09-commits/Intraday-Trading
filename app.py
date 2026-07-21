@@ -22,7 +22,7 @@ COMMON_NAME_TRANSLATOR = {
     "AMD": "AMD", "MICRON": "MU"
 }
 
-# Helper function to scrape live Index Tickers dynamically with a browser user-agent
+# Helper function to scrape live Index Tickers dynamically with robust fallback parsing
 @st.cache_data(ttl=86400) # Cache lists for 24 hours
 def load_index_tickers(index_name):
     headers = {
@@ -45,9 +45,14 @@ def load_index_tickers(index_name):
                 html = response.read().decode('utf-8')
             tables = pd.read_html(io.StringIO(html))
             for t in tables:
-                if 'Ticker' in t.columns:
-                    return sorted(t['Ticker'].tolist())
-            return ["AAPL", "MSFT", "AMZN", "NVDA", "TSLA", "META", "GOOGL", "NFLX", "AMD", "INTC"]
+                cols = [str(c).lower() for c in t.columns]
+                if any(x in cols for x in ['ticker', 'symbol']):
+                    col_name = t.columns[cols.index('ticker')] if 'ticker' in cols else t.columns[cols.index('symbol')]
+                    tickers = t[col_name].dropna().astype(str).str.replace('.', '-', regex=False).tolist()
+                    tickers = [s.strip() for s in tickers if s.strip().isalpha()]
+                    if len(tickers) > 50:
+                        return sorted(list(set(tickers)))
+            return ["AAPL", "MSFT", "AMZN", "NVDA", "TSLA", "META", "GOOGL", "GOOG", "NFLX", "AMD", "INTC", "PYPL", "ADBE", "COST", "PEP", "AVGO", "CSCO", "TMUS", "CMCSA", "AMGN"]
 
         elif index_name == "FTSE 100 (UK - LSE)":
             url = 'https://en.wikipedia.org/wiki/FTSE_100_Index'
@@ -93,7 +98,7 @@ TIMEFRAME_MAP = {
     "1 Day": {"yf_interval": "1d", "yf_period": "5y", "tv_interval": "D"}
 }
 
-# Comprehensive Stock Directory for Manual search dropdown
+# Stock Directory
 STOCK_DIRECTORY = {
     "Tesla Inc. (TSLA)": "TSLA",
     "NVIDIA Corp. (NVDA)": "NVDA",
@@ -152,7 +157,6 @@ include_extended_hours = st.sidebar.checkbox(
 st.sidebar.subheader("Strategy Settings")
 rsi_period = st.sidebar.slider("RSI Period", min_value=5, max_value=30, value=14)
 
-# Set defaults for EMA spans so they are always defined
 fast_span = 9
 slow_span = 21
 
@@ -174,13 +178,11 @@ elif strategy_type == "EMA Crossover":
     fast_span = st.sidebar.slider("Fast EMA", min_value=3, max_value=20, value=9)
     slow_span = st.sidebar.slider("Slow EMA", min_value=10, max_value=50, value=21)
 
-# Format for TV widget
 tv_symbol = format_tv_symbol(ticker)
 
-# Create Tabs
 tab1, tab2, tab3 = st.tabs(["📺 Live TradingView Chart", "📊 Python Strategy Signals", "🔍 Real-Time Index Screener"])
 
-## --- TAB 1: Live Interactive TradingView Chart ---
+# --- TAB 1: Live Interactive TradingView Chart ---
 with tab1:
     st.subheader(f"Live {selected_tf} Chart: {tv_symbol}")
     
@@ -214,7 +216,6 @@ with tab1:
     </div>
     """
     components.html(tradingview_widget_html, height=600)
-    
 
 # --- TAB 2: Custom Strategy Backtest Signals ---
 with tab2:
@@ -226,7 +227,7 @@ with tab2:
                 ticker, 
                 period=tf_settings['yf_period'], 
                 interval=tf_settings['yf_interval'],
-                prepost=include_extended_hours,  # <--- PASSES EXTENDED HOURS TOGGLE
+                prepost=include_extended_hours,
                 multi_level_index=False
             )
             
@@ -255,18 +256,8 @@ with tab2:
         
         data['Vol_SMA'] = volume_series.rolling(window=10).mean()
         data['Signal'] = 0
-        
-# Calculate Basic Indicators
-        delta = close_series.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
-        rs = gain / loss
-        data['RSI'] = 100 - (100 / (1 + rs))
-        
-        data['Vol_SMA'] = volume_series.rolling(window=10).mean()
-        data['Signal'] = 0
 
-        # Calculate Common Moving Averages & VWAP for Confluence Check
+        # Calculate Moving Averages & VWAP
         data['EMA_Fast'] = close_series.ewm(span=fast_span, adjust=False).mean()
         data['EMA_Slow'] = close_series.ewm(span=slow_span, adjust=False).mean()
         
@@ -277,11 +268,7 @@ with tab2:
         cum_vol = volume_series.groupby(dates).cumsum()
         data['VWAP'] = cum_tp_vol / cum_vol
 
-        # =========================================================================
-        # STRATEGY SIGNAL ROUTING (ADD ALL-IN-ONE CONFLUENCE RIGHT HERE)
-        # =========================================================================
         if strategy_type == "All-in-One Confluence":
-            # 1. Buy when: EMA Fast > Slow + Price > VWAP + Healthy RSI (40-65) + Above Average Volume
             data.loc[
                 (data['EMA_Fast'] > data['EMA_Slow']) & 
                 (close_series > data['VWAP']) & 
@@ -290,7 +277,6 @@ with tab2:
                 'Signal'
             ] = 1
             
-            # 2. Sell / Exit when: EMA Fast drops below Slow OR Price drops below VWAP OR RSI overbought (> 70)
             data.loc[
                 (data['EMA_Fast'] < data['EMA_Slow']) | 
                 (close_series < data['VWAP']) | 
@@ -328,9 +314,7 @@ with tab2:
 
         data['Position'] = data['Signal'].diff()
 
-        # =========================================================================
-        # AUTOMATIC CANDLESTICK PATTERN DETECTOR
-        # =========================================================================
+        # CANDLESTICK PATTERN DETECTOR
         st.markdown("---")
         st.markdown("### 🕯️ Automatic Candlestick Pattern Recognition")
         
@@ -344,17 +328,14 @@ with tab2:
         data['Pattern'] = "⚪ No Pattern"
         data['Pattern_Signal'] = 0
         
-        # 1. Hammer Detection
         is_hammer = (lower_shadow > (2 * body)) & (upper_shadow < (0.1 * candle_range)) & (data['RSI'] < 40)
         data.loc[is_hammer, 'Pattern'] = "🟢 BULLISH HAMMER"
         data.loc[is_hammer, 'Pattern_Signal'] = 1
         
-        # 2. Shooting Star Detection
         is_shooting_star = (upper_shadow > (2 * body)) & (lower_shadow < (0.1 * candle_range)) & (data['RSI'] > 60)
         data.loc[is_shooting_star, 'Pattern'] = "🔴 BEARISH SHOOTING STAR"
         data.loc[is_shooting_star, 'Pattern_Signal'] = -1
         
-        # 3. Engulfing Detection
         prev_close = close_series.shift(1)
         prev_open = data['Open'].squeeze().shift(1)
         curr_close = close_series
@@ -368,7 +349,6 @@ with tab2:
         data.loc[is_bearish_engulfing, 'Pattern'] = "🔴 BEARISH ENGULFING"
         data.loc[is_bearish_engulfing, 'Pattern_Signal'] = -1
 
-        # Display Latest Candle Findings
         latest_candle = data.iloc[-1]
         latest_pattern = latest_candle['Pattern']
         
@@ -379,9 +359,7 @@ with tab2:
         else:
             st.info(f"**Current Candle Pattern:** No clear reversal candlestick pattern formed on the current {selected_tf} bar.")
 
-        # =========================================================================
-        # LIVE SIGNAL ADVISOR MODULE (WITH EXTENDED HOURS METRICS)
-        # =========================================================================
+        # LIVE SIGNAL ADVISOR MODULE
         st.markdown("---")
         st.markdown("### 🚨 Live Signal Advisor & Market Session Status")
         
@@ -390,7 +368,6 @@ with tab2:
             fast = live_ticker.fast_info
             info = live_ticker.info
             
-            # Prioritize official preMarketPrice/postMarketPrice if available, else fast_info
             pre_price = info.get('preMarketPrice')
             post_price = info.get('postMarketPrice')
             
@@ -409,16 +386,18 @@ with tab2:
             price_change = 0.0
             pct_change = 0.0
 
-        # Display Live Session Price Banner
         chg_color = "🟢" if price_change >= 0 else "🔴"
         st.info(f"**Live Extended Market Price:** `${last_price:.2f}` ({chg_color} `{price_change:+.2f}` / `{pct_change:+.2f}%`) | **Last Bar Timestamp:** `{data.index[-1].strftime('%Y-%m-%d %H:%M EST')}`")
         
-        # ATR Calculation
         high_low = high_series - low_series
         high_close = (high_series - close_series.shift()).abs()
         low_close = (low_series - close_series.shift()).abs()
         ranges = pd.concat([high_low, high_close, low_close], axis=1)
         atr_value = float(ranges.max(axis=1).rolling(window=14).mean().iloc[-1])
+
+        # Define signal state for UI advisor
+        last_signal = int(data['Signal'].iloc[-1])
+        last_rsi = float(data['RSI'].iloc[-1])
 
         col_sig, col_metrics = st.columns([1.5, 2])
         
@@ -448,15 +427,12 @@ with tab2:
         try:
             latest_date = data.index[-1].date()
             today_data = data[data.index.date == latest_date]
-            
-            # Cumulative total volume traded so far today (including pre/post-market)
             total_session_vol = float(today_data['Volume'].sum())
             last_bar_vol = float(today_data['Volume'].iloc[-1])
         except Exception:
             total_session_vol = float(volume_series.iloc[-1])
             last_bar_vol = float(volume_series.iloc[-1])
 
-        # Format Volume helper
         def format_vol(v):
             if v >= 1_000_000_000:
                 return f"{v / 1_000_000_000:.2f}B"
@@ -469,39 +445,29 @@ with tab2:
         formatted_total_vol = format_vol(total_session_vol)
         formatted_bar_vol = format_vol(last_bar_vol)
         
-        # --- PRE / POST MARKET VOLUME SURGE DETECTOR ---
         last_vol = float(volume_series.iloc[-1])
         vol_avg = float(data['Vol_SMA'].iloc[-1])
-        
-        # Calculate volume surge ratio
         vol_ratio = last_vol / vol_avg if vol_avg > 0 else 1.0
         
-        # Detect extended-hours bar timestamp
         last_bar_time = data.index[-1]
         is_extended_hours = (last_bar_time.hour < 9 or (last_bar_time.hour == 9 and last_bar_time.minute < 30)) or (last_bar_time.hour >= 16)
         
-        # Surge alert banner
         if is_extended_hours and vol_ratio >= 2.0:
             st.warning(f"⚡ **EXTENDED HOURS VOLUME SURGE DETECTED!** Latest volume is **{vol_ratio:.1f}x** higher than average ({formatted_bar_vol} vs avg {format_vol(vol_avg)}).")
         elif vol_ratio >= 2.5:
             st.info(f"🔥 **HIGH VOLUME SPIKE:** Trading volume is **{vol_ratio:.1f}x** above the 10-period moving average.")
 
-        # --- UPDATE METRIC CARDS ---
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         col_m1.metric("Live Price", f"${last_price:.2f}", f"{price_change:+.2f} ({pct_change:+.2f}%)")
         col_m2.metric("Current RSI", f"{float(data['RSI'].iloc[-1]):.1f}")
         col_m3.metric("Session Volume", formatted_total_vol, delta=f"Last Bar: {formatted_bar_vol}")
         col_m4.metric("Strategy Signal", "BUY" if data['Signal'].iloc[-1] == 1 else ("SELL" if data['Signal'].iloc[-1] == -1 else "NEUTRAL"))
 
-        # =========================================================================
-        # PLOTTING THE STRATEGY
-        # =========================================================================
+        # PLOTTING
         st.markdown("---")
         plot_data = data.tail(100)
-        # Update subplot grid to 3 rows (Price, RSI, Volume)
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), sharex=True, gridspec_kw={'height_ratios': [3, 1, 1]})
         
-        # [Ax1: Price Plotting Code Remains Same...]
         ax1.plot(plot_data.index, plot_data['Close'], label='Close Price', color='black', alpha=0.7)
         if strategy_type in ["VWAP Pullback", "All-in-One Confluence"] and 'VWAP' in plot_data.columns:
             ax1.plot(plot_data.index, plot_data['VWAP'], label='VWAP', color='purple', linewidth=2)
@@ -512,24 +478,19 @@ with tab2:
         ax1.legend(loc='upper left')
         ax1.grid(True, alpha=0.3)
 
-        # [Ax2: RSI Plotting]
         ax2.plot(plot_data.index, plot_data['RSI'], label='RSI', color='orange')
         ax2.axhline(70, color='red', linestyle='--', alpha=0.5)
         ax2.axhline(30, color='green', linestyle='--', alpha=0.5)
         ax2.set_ylabel("RSI")
         ax2.grid(True, alpha=0.3)
 
-        # [Ax3: NEW VOLUME BARS PLOT]
-        # Volume Subplot displaying extended session bars
         colors = ['green' if c >= o else 'red' for c, o in zip(plot_data['Close'], plot_data['Open'])]
         ax3.bar(plot_data.index, plot_data['Volume'], color=colors, alpha=0.6, width=0.003)
         ax3.set_ylabel("Volume")
         ax3.grid(True, alpha=0.3)
         st.pyplot(fig)
 
-        # =========================================================================
         # RECENT TRADES HISTORY LOG
-        # =========================================================================
         st.markdown("### 📜 Recent Signal Execution Logs")
         history = data[data['Position'].isin([2, -2])].copy()
         
@@ -552,13 +513,10 @@ with tab3:
     st.subheader("🔍 High-Speed Global Index Screener")
     st.write("Scan entire market indices or run an on-demand real-time check on any custom stock symbol.")
     
-    # Initialize session state storage so data persists when filtering
     if "scan_results" not in st.session_state:
         st.session_state.scan_results = None
 
-    # =========================================================================
     # OPTION 1: QUICK SINGLE CUSTOM STOCK SCANNER
-    # =========================================================================
     st.markdown("### 🎯 Option 1: Quick Scan a Single Custom Stock")
     col_search, col_search_btn = st.columns([3, 1])
     
@@ -605,7 +563,6 @@ with tab3:
                     current_vol = float(s_volume.iloc[-1])
                     current_vol_sma = float(s_vol_sma.iloc[-1])
                     
-                    # Format Volume K/M/B
                     if current_vol >= 1_000_000_000:
                         vol_str = f"{current_vol / 1_000_000_000:.2f}B"
                     elif current_vol >= 1_000_000:
@@ -678,10 +635,19 @@ with tab3:
                         else:
                             action = "🔴 STRATEGY SELL"
                     
+                    vol_surge_ratio = current_vol / current_vol_sma if current_vol_sma > 0 else 1.0
+                    if vol_surge_ratio >= 2.0:
+                        vol_alert = f"⚡ SURGE ({vol_surge_ratio:.1f}x)"
+                    elif vol_surge_ratio >= 1.5:
+                        vol_alert = f"🔥 HIGH ({vol_surge_ratio:.1f}x)"
+                    else:
+                        vol_alert = "⚪ NORMAL"
+
                     st.session_state.scan_results = [{
                         "Stock": single_search_symbol,
                         "Current Price": f"${current_price:.2f}" if not single_search_symbol.endswith(".L") else f"£{current_price/100:.2f}",
                         "Volume": vol_str,
+                        "Volume Alert": vol_alert,
                         "RSI": round(current_rsi, 1),
                         "Candle Pattern": detected_pattern,
                         "Strategy Signal": action,
@@ -691,9 +657,7 @@ with tab3:
             except Exception as single_err:
                 st.error(f"Error executing custom stock lookup: {single_err}")
 
-    # =========================================================================
     # OPTION 2: FULL MARKET INDEX SCREENER
-    # =========================================================================
     st.markdown("---")
     st.markdown("### 📊 Option 2: Full Market Index / Watchlist Scan")
     
@@ -713,7 +677,7 @@ with tab3:
         "Limit scan size (Up to maximum watchlist length):", 
         min_value=0, 
         max_value=slider_max, 
-        value=min(100, num_tickers)
+        value=num_tickers
     )
     
     if st.button("🚀 Run Live Index Scan"):
@@ -853,26 +817,24 @@ with tab3:
                                 else:
                                     action = "🔴 STRATEGY SELL"
                             
-                                # 1. Calculate Volume Surge Ratio
-                                vol_surge_ratio = current_vol / current_vol_sma if current_vol_sma > 0 else 1.0
-                                if vol_surge_ratio >= 2.0:
-                                    vol_alert = f"⚡ SURGE ({vol_surge_ratio:.1f}x)"
-                                elif vol_surge_ratio >= 1.5:
-                                    vol_alert = f"🔥 HIGH ({vol_surge_ratio:.1f}x)"
-                                else:
-                                    vol_alert = "⚪ NORMAL"
+                            vol_surge_ratio = current_vol / current_vol_sma if current_vol_sma > 0 else 1.0
+                            if vol_surge_ratio >= 2.0:
+                                vol_alert = f"⚡ SURGE ({vol_surge_ratio:.1f}x)"
+                            elif vol_surge_ratio >= 1.5:
+                                vol_alert = f"🔥 HIGH ({vol_surge_ratio:.1f}x)"
+                            else:
+                                vol_alert = "⚪ NORMAL"
 
-                                # 2. Append to screener_results with the new 'Volume Alert' column
-                                screener_results.append({
-                                    "Stock": s_ticker,
-                                    "Current Price": f"${current_price:.2f}" if not s_ticker.endswith(".L") else f"£{current_price/100:.2f}",
-                                    "Volume": vol_str,
-                                    "Volume Alert": vol_alert,  # <--- NEW COLUMN ADDED HERE
-                                    "RSI": round(current_rsi, 1),
-                                    "Candle Pattern": detected_pattern,
-                                    "Strategy Signal": action,
-                                    "Timestamp": str(s_data.index[-1].strftime('%H:%M:%S'))
-                                })
+                            screener_results.append({
+                                "Stock": s_ticker,
+                                "Current Price": f"${current_price:.2f}" if not s_ticker.endswith(".L") else f"£{current_price/100:.2f}",
+                                "Volume": vol_str,
+                                "Volume Alert": vol_alert,
+                                "RSI": round(current_rsi, 1),
+                                "Candle Pattern": detected_pattern,
+                                "Strategy Signal": action,
+                                "Timestamp": str(s_data.index[-1].strftime('%H:%M:%S'))
+                            })
                             
                         except Exception:
                             continue
@@ -884,9 +846,7 @@ with tab3:
             progress_placeholder.success(f"Successfully scanned {len(screener_results)} stocks!")
             st.session_state.scan_results = screener_results
 
-    # =========================================================================
-    # RENDER DATA TABLE & INSTANT SEARCH FILTER
-    # =========================================================================
+    # RENDER DATA TABLE
     if st.session_state.scan_results is not None:
         df_results = pd.DataFrame(st.session_state.scan_results)
         
