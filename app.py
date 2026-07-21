@@ -446,51 +446,55 @@ with tab2:
                 st.write("The strategy parameters are currently neutral. Wait for the next setup crossover or oversold range dip.")
 
         with col_metrics:
-            c1, c2, c3 = st.columns(3)
-            c1.metric(label="Live Market Price", value=f"${last_price:.2f}")
-            c2.metric(label="Current RSI", value=f"{last_rsi:.1f}")
-            c3.metric(label="ATR (14)", value=f"${atr_value:.2f}")
+            # Format volume into clean K/M/B strings
+            current_raw_vol = float(volume_series.iloc[-1])
+            if current_raw_vol >= 1_000_000_000:
+                formatted_vol = f"{current_raw_vol / 1_000_000_000:.2f}B"
+            elif current_raw_vol >= 1_000_000:
+                formatted_vol = f"{current_raw_vol / 1_000_000:.2f}M"
+            elif current_raw_vol >= 1_000:
+                formatted_vol = f"{current_raw_vol / 1_000:.1f}K"
+            else:
+                formatted_vol = f"{int(current_raw_vol)}"
+
+            # Display 4 Metrics Cards (Price, RSI, Volume, Signal)
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            col_m1.metric("Live Price", f"${last_price:.2f}", f"{price_change:+.2f} ({pct_change:+.2f}%)")
+            col_m2.metric("Current RSI", f"{float(data['RSI'].iloc[-1]):.1f}")
+            col_m3.metric("Trading Volume", formatted_vol)
+            col_m4.metric("Strategy Signal", "BUY" if data['Signal'].iloc[-1] == 1 else ("SELL" if data['Signal'].iloc[-1] == -1 else "NEUTRAL"))
 
         # =========================================================================
         # PLOTTING THE STRATEGY
         # =========================================================================
         st.markdown("---")
         plot_data = data.tail(100)
+        # Update subplot grid to 3 rows (Price, RSI, Volume)
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), sharex=True, gridspec_kw={'height_ratios': [3, 1, 1]})
         
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
-
-        # Update this line inside the plotting section:
+        # [Ax1: Price Plotting Code Remains Same...]
+        ax1.plot(plot_data.index, plot_data['Close'], label='Close Price', color='black', alpha=0.7)
         if strategy_type in ["VWAP Pullback", "All-in-One Confluence"] and 'VWAP' in plot_data.columns:
             ax1.plot(plot_data.index, plot_data['VWAP'], label='VWAP', color='purple', linewidth=2)
-            
         if strategy_type in ["EMA Crossover", "All-in-One Confluence"] and 'EMA_Fast' in plot_data.columns:
             ax1.plot(plot_data.index, plot_data['EMA_Fast'], label='Fast EMA', color='blue', linestyle='--')
             ax1.plot(plot_data.index, plot_data['EMA_Slow'], label='Slow EMA', color='orange', linestyle='--')
+        ax1.set_title(f"{ticker} - {selected_tf} Price & Signals", fontsize=14, fontweight='bold')
+        ax1.legend(loc='upper left')
+        ax1.grid(True, alpha=0.3)
 
-        buys = plot_data[plot_data['Position'] == 2]
-        if not buys.empty:
-            ax1.scatter(buys.index, buys['Close'], label='BUY Signal', marker='^', color='green', s=200)
-
-        sells = plot_data[plot_data['Position'] == -2]
-        if not sells.empty:
-            ax1.scatter(sells.index, sells['Close'], label='SELL/EXIT', marker='v', color='red', s=200)
-
-        ax1.set_title(f"{ticker} - {strategy_type} ({selected_tf} Chart)")
-        ax1.set_ylabel("Price")
-        ax1.legend()
-        ax1.grid(True)
-
-        ax2.plot(plot_data.index, plot_data['RSI'], label='RSI', color='teal', linewidth=1.5)
-        ax2.axhline(70, color='red', linestyle=':', alpha=0.5)
-        ax2.axhline(30, color='green', linestyle=':', alpha=0.5)
-        
-        if strategy_type == "RSI Range Spotter":
-            ax2.axhspan(rsi_min, rsi_max, color='lightgreen', alpha=0.3, label='Buy Zone')
-            
+        # [Ax2: RSI Plotting]
+        ax2.plot(plot_data.index, plot_data['RSI'], label='RSI', color='orange')
+        ax2.axhline(70, color='red', linestyle='--', alpha=0.5)
+        ax2.axhline(30, color='green', linestyle='--', alpha=0.5)
         ax2.set_ylabel("RSI")
-        ax2.set_ylim(10, 90)
-        ax2.legend()
-        ax2.grid(True)
+        ax2.grid(True, alpha=0.3)
+
+        # [Ax3: NEW VOLUME BARS PLOT]
+        colors = ['green' if c >= o else 'red' for c, o in zip(plot_data['Close'], plot_data['Open'])]
+        ax3.bar(plot_data.index, plot_data['Volume'], color=colors, alpha=0.6, width=0.005)
+        ax3.set_ylabel("Volume")
+        ax3.grid(True, alpha=0.3)
 
         st.pyplot(fig)
 
@@ -524,7 +528,7 @@ with tab3:
         st.session_state.scan_results = None
 
     # =========================================================================
-    # OPTION A: NEW ON-DEMAND SINGLE STOCK SCANNER
+    # OPTION 1: QUICK SINGLE CUSTOM STOCK SCANNER
     # =========================================================================
     st.markdown("### 🎯 Option 1: Quick Scan a Single Custom Stock")
     col_search, col_search_btn = st.columns([3, 1])
@@ -536,14 +540,13 @@ with tab3:
         ).strip().upper()
         
     with col_search_btn:
-        st.write(" ") # Structural alignment padding
+        st.write(" ") 
         st.write(" ") 
         run_single_scan = st.button("🔍 Scan Single Stock")
 
     if run_single_scan and single_search_symbol:
         with st.spinner(f"Running high-precision scan for {single_search_symbol}..."):
             try:
-                # Fetch a short, tight historical window for swift calculations
                 s_data = yf.download(
                     tickers=single_search_symbol,
                     period="5d",
@@ -561,7 +564,6 @@ with tab3:
                     s_open = s_data['Open'].squeeze()
                     s_volume = s_data['Volume'].squeeze()
                     
-                    # Basic calculations
                     s_delta = s_close.diff()
                     s_gain = (s_delta.where(s_delta > 0, 0)).rolling(window=rsi_period).mean()
                     s_loss = (-s_delta.where(s_delta < 0, 0)).rolling(window=rsi_period).mean()
@@ -574,7 +576,16 @@ with tab3:
                     current_vol = float(s_volume.iloc[-1])
                     current_vol_sma = float(s_vol_sma.iloc[-1])
                     
-                    # Candlestick framework math
+                    # Format Volume K/M/B
+                    if current_vol >= 1_000_000_000:
+                        vol_str = f"{current_vol / 1_000_000_000:.2f}B"
+                    elif current_vol >= 1_000_000:
+                        vol_str = f"{current_vol / 1_000_000:.2f}M"
+                    elif current_vol >= 1_000:
+                        vol_str = f"{current_vol / 1_000:.1f}K"
+                    else:
+                        vol_str = str(int(current_vol))
+                    
                     s_body = (s_close - s_open).abs()
                     s_range = s_high - s_low
                     s_range = s_range.replace(0, 0.00001)
@@ -594,13 +605,28 @@ with tab3:
                         elif (p_close > p_open) and (c_close < c_open) and (c_open >= p_close) and (c_close <= p_open):
                             detected_pattern = "🔴 BEARISH ENGULFING"
                     
-                    # Strategy routing signals
                     action = "⚪ HOLD / NEUTRAL"
-                    if strategy_type == "RSI Range Spotter":
+                    if strategy_type == "All-in-One Confluence":
+                        s_fast = s_close.ewm(span=fast_span, adjust=False).mean()
+                        s_slow = s_close.ewm(span=slow_span, adjust=False).mean()
+                        typical_price = (s_high + s_low + s_close) / 3
+                        tp_vol = typical_price * s_volume
+                        dates = s_data.index.date
+                        cum_tp_vol = tp_vol.groupby(dates).cumsum()
+                        cum_vol = s_volume.groupby(dates).cumsum()
+                        s_vwap = cum_tp_vol / cum_vol
+                        
+                        if (float(s_fast.iloc[-1]) > float(s_slow.iloc[-1])) and (current_price > float(s_vwap.iloc[-1])) and (40 <= current_rsi <= 65) and (current_vol > current_vol_sma * 0.8):
+                            action = "🟢 STRATEGY BUY"
+                        elif (float(s_fast.iloc[-1]) < float(s_slow.iloc[-1])) or (current_price < float(s_vwap.iloc[-1])) or (current_rsi > 70):
+                            action = "🔴 STRATEGY SELL"
+
+                    elif strategy_type == "RSI Range Spotter":
                         if (current_rsi >= rsi_min) and (current_rsi <= rsi_max) and (current_vol > current_vol_sma * 0.8):
                             action = "🟢 STRATEGY BUY"
                         elif current_rsi > 65:
                             action = "🔴 STRATEGY SELL"
+                            
                     elif strategy_type == "VWAP Pullback":
                         typical_price = (s_high + s_low + s_close) / 3
                         tp_vol = typical_price * s_volume
@@ -609,10 +635,12 @@ with tab3:
                         cum_vol = s_volume.groupby(dates).cumsum()
                         s_vwap_series = cum_tp_vol / cum_vol
                         current_vwap = float(s_vwap_series.iloc[-1])
+                        
                         if (current_price > current_vwap) and (float(s_close.iloc[-2]) <= float(s_vwap_series.iloc[-2])) and (current_rsi < rsi_oversold):
                             action = "🟢 STRATEGY BUY"
                         elif current_price < current_vwap:
                             action = "🔴 STRATEGY SELL"
+                            
                     else: # EMA Crossover
                         s_fast = s_close.ewm(span=fast_span, adjust=False).mean()
                         s_slow = s_close.ewm(span=slow_span, adjust=False).mean()
@@ -621,10 +649,10 @@ with tab3:
                         else:
                             action = "🔴 STRATEGY SELL"
                     
-                    # Update Session State with just this single row to override table view
                     st.session_state.scan_results = [{
                         "Stock": single_search_symbol,
                         "Current Price": f"${current_price:.2f}" if not single_search_symbol.endswith(".L") else f"£{current_price/100:.2f}",
+                        "Volume": vol_str,
                         "RSI": round(current_rsi, 1),
                         "Candle Pattern": detected_pattern,
                         "Strategy Signal": action,
@@ -635,7 +663,7 @@ with tab3:
                 st.error(f"Error executing custom stock lookup: {single_err}")
 
     # =========================================================================
-    # OPTION B: ORIGINAL INDEX BATCH SCREENER
+    # OPTION 2: FULL MARKET INDEX SCREENER
     # =========================================================================
     st.markdown("---")
     st.markdown("### 📊 Option 2: Full Market Index / Watchlist Scan")
@@ -724,6 +752,15 @@ with tab3:
                             current_vol = float(s_volume.iloc[-1])
                             current_vol_sma = float(s_vol_sma.iloc[-1])
                             
+                            if current_vol >= 1_000_000_000:
+                                vol_str = f"{current_vol / 1_000_000_000:.2f}B"
+                            elif current_vol >= 1_000_000:
+                                vol_str = f"{current_vol / 1_000_000:.2f}M"
+                            elif current_vol >= 1_000:
+                                vol_str = f"{current_vol / 1_000:.1f}K"
+                            else:
+                                vol_str = str(int(current_vol))
+                            
                             s_body = (s_close - s_open).abs()
                             s_range = s_high - s_low
                             s_range = s_range.replace(0, 0.00001)
@@ -744,11 +781,27 @@ with tab3:
                                     detected_pattern = "🔴 BEARISH ENGULFING"
                             
                             action = "⚪ HOLD / NEUTRAL"
-                            if strategy_type == "RSI Range Spotter":
+                            if strategy_type == "All-in-One Confluence":
+                                s_fast = s_close.ewm(span=fast_span, adjust=False).mean()
+                                s_slow = s_close.ewm(span=slow_span, adjust=False).mean()
+                                typical_price = (s_high + s_low + s_close) / 3
+                                tp_vol = typical_price * s_volume
+                                dates = s_data.index.date
+                                cum_tp_vol = tp_vol.groupby(dates).cumsum()
+                                cum_vol = s_volume.groupby(dates).cumsum()
+                                s_vwap = cum_tp_vol / cum_vol
+                                
+                                if (float(s_fast.iloc[-1]) > float(s_slow.iloc[-1])) and (current_price > float(s_vwap.iloc[-1])) and (40 <= current_rsi <= 65) and (current_vol > current_vol_sma * 0.8):
+                                    action = "🟢 STRATEGY BUY"
+                                elif (float(s_fast.iloc[-1]) < float(s_slow.iloc[-1])) or (current_price < float(s_vwap.iloc[-1])) or (current_rsi > 70):
+                                    action = "🔴 STRATEGY SELL"
+
+                            elif strategy_type == "RSI Range Spotter":
                                 if (current_rsi >= rsi_min) and (current_rsi <= rsi_max) and (current_vol > current_vol_sma * 0.8):
                                     action = "🟢 STRATEGY BUY"
                                 elif current_rsi > 65:
                                     action = "🔴 STRATEGY SELL"
+                                    
                             elif strategy_type == "VWAP Pullback":
                                 typical_price = (s_high + s_low + s_close) / 3
                                 tp_vol = typical_price * s_volume
@@ -757,10 +810,12 @@ with tab3:
                                 cum_vol = s_volume.groupby(dates).cumsum()
                                 s_vwap_series = cum_tp_vol / cum_vol
                                 current_vwap = float(s_vwap_series.iloc[-1])
+                                
                                 if (current_price > current_vwap) and (float(s_close.iloc[-2]) <= float(s_vwap_series.iloc[-2])) and (current_rsi < rsi_oversold):
                                     action = "🟢 STRATEGY BUY"
                                 elif current_price < current_vwap:
                                     action = "🔴 STRATEGY SELL"
+                                    
                             else: 
                                 s_fast = s_close.ewm(span=fast_span, adjust=False).mean()
                                 s_slow = s_close.ewm(span=slow_span, adjust=False).mean()
@@ -772,6 +827,7 @@ with tab3:
                             screener_results.append({
                                 "Stock": s_ticker,
                                 "Current Price": f"${current_price:.2f}" if not s_ticker.endswith(".L") else f"£{current_price/100:.2f}",
+                                "Volume": vol_str,
                                 "RSI": round(current_rsi, 1),
                                 "Candle Pattern": detected_pattern,
                                 "Strategy Signal": action,
@@ -789,7 +845,7 @@ with tab3:
             st.session_state.scan_results = screener_results
 
     # =========================================================================
-    # RENDER DATA & APPLY FILTER CODES
+    # RENDER DATA TABLE & INSTANT SEARCH FILTER
     # =========================================================================
     if st.session_state.scan_results is not None:
         df_results = pd.DataFrame(st.session_state.scan_results)
@@ -813,4 +869,4 @@ with tab3:
             return 'background-color: #e2e3e5; color: #383d41;'
         
         styled_df = df_results.style.map(style_status, subset=['Candle Pattern', 'Strategy Signal'])
-        st.dataframe(styled_df, use_container_width=True, height=500)
+        st.data_editor(styled_df, use_container_width=True, height=500, disabled=True)
