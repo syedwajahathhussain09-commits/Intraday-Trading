@@ -445,10 +445,7 @@ with tab2:
                 st.info(f"### ⚪ ACTIVE ACTION: HOLD / NO SIGNAL\n**Live Price:** ${last_price:.2f} | **RSI:** {last_rsi:.1f}")
                 st.write("The strategy parameters are currently neutral. Wait for the next setup crossover or oversold range dip.")
 
-        with col_metrics:
-            # --- EXTENDED HOURS VOLUME CALCULATION ---
         try:
-            # Get volume for the current trading date bar series
             latest_date = data.index[-1].date()
             today_data = data[data.index.date == latest_date]
             
