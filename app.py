@@ -141,6 +141,13 @@ selected_tf = st.sidebar.selectbox(
 )
 tf_settings = TIMEFRAME_MAP[selected_tf]
 
+# --- EXTENDED HOURS TOGGLE ---
+include_extended_hours = st.sidebar.checkbox(
+    "🌅/🌙 Include Pre & Post-Market Data",
+    value=True,
+    help="Enable to track trading activity outside regular market hours (4:00 AM - 8:00 PM EST)."
+)
+
 # 4. Parameters based on Strategy
 st.sidebar.subheader("Strategy Settings")
 rsi_period = st.sidebar.slider("RSI Period", min_value=5, max_value=30, value=14)
@@ -177,7 +184,7 @@ tab1, tab2, tab3 = st.tabs(["📺 Live TradingView Chart", "📊 Python Strategy
 with tab1:
     st.subheader(f"Live {selected_tf} Chart: {tv_symbol}")
     
-    tradingview_widget_html = f"""
+   tradingview_widget_html = f"""
     <div class="tradingview-widget-container" style="height:600px; width:100%; margin:0 auto;">
       <div id="tradingview_chart" style="height:580px; width:100%;"></div>
       <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
@@ -196,6 +203,7 @@ with tab1:
           "enable_publishing": false,
           "hide_side_toolbar": false,
           "allow_symbol_change": true,
+          "extended_hours": true,  /* <--- ENABLES PRE/POST MARKET CANDLES IN CHART */
           "container_id": "tradingview_chart"
         }});
       }} catch(err) {{
@@ -217,6 +225,7 @@ with tab2:
                 ticker, 
                 period=tf_settings['yf_period'], 
                 interval=tf_settings['yf_interval'],
+                prepost=include_extended_hours,  # <--- PASSES EXTENDED HOURS TOGGLE
                 multi_level_index=False
             )
             
@@ -370,20 +379,28 @@ with tab2:
             st.info(f"**Current Candle Pattern:** No clear reversal candlestick pattern formed on the current {selected_tf} bar.")
 
         # =========================================================================
-        # LIVE SIGNAL ADVISOR MODULE (FORCE TRUE REAL-TIME TICK)
+        # LIVE SIGNAL ADVISOR MODULE (WITH EXTENDED HOURS METRICS)
         # =========================================================================
         st.markdown("---")
-        st.markdown("### 🚨 Live Signal Advisor")
+        st.markdown("### 🚨 Live Signal Advisor & Market Session Status")
         
         try:
             live_ticker = yf.Ticker(ticker)
-            last_price = float(live_ticker.fast_info['last_price'])
+            fast = live_ticker.fast_info
+            
+            # Fetch extended or regular price dynamically
+            last_price = float(fast['last_price'])
+            prev_close = float(fast['previous_close'])
+            price_change = last_price - prev_close
+            pct_change = (price_change / prev_close) * 100
         except Exception:
             last_price = float(close_series.iloc[-1])
-            
-        last_row = data.iloc[-1]
-        last_rsi = float(data['RSI'].iloc[-1])
-        last_signal = int(last_row['Signal'])
+            price_change = 0.0
+            pct_change = 0.0
+
+        # Display Live Session Price Banner
+        chg_color = "🟢" if price_change >= 0 else "🔴"
+        st.info(f"**Live Extended Market Price:** `${last_price:.2f}` ({chg_color} `{price_change:+.2f}` / `{pct_change:+.2f}%`) | **Last Bar Timestamp:** `{data.index[-1].strftime('%Y-%m-%d %H:%M EST')}`")
         
         # ATR Calculation
         high_low = high_series - low_series
