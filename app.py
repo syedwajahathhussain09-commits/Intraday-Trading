@@ -446,23 +446,38 @@ with tab2:
                 st.write("The strategy parameters are currently neutral. Wait for the next setup crossover or oversold range dip.")
 
         with col_metrics:
-            # Format volume into clean K/M/B strings
-            current_raw_vol = float(volume_series.iloc[-1])
-            if current_raw_vol >= 1_000_000_000:
-                formatted_vol = f"{current_raw_vol / 1_000_000_000:.2f}B"
-            elif current_raw_vol >= 1_000_000:
-                formatted_vol = f"{current_raw_vol / 1_000_000:.2f}M"
-            elif current_raw_vol >= 1_000:
-                formatted_vol = f"{current_raw_vol / 1_000:.1f}K"
-            else:
-                formatted_vol = f"{int(current_raw_vol)}"
+            # --- EXTENDED HOURS VOLUME CALCULATION ---
+        try:
+            # Get volume for the current trading date bar series
+            latest_date = data.index[-1].date()
+            today_data = data[data.index.date == latest_date]
+            
+            # Cumulative total volume traded so far today (including pre/post-market)
+            total_session_vol = float(today_data['Volume'].sum())
+            last_bar_vol = float(today_data['Volume'].iloc[-1])
+        except Exception:
+            total_session_vol = float(volume_series.iloc[-1])
+            last_bar_vol = float(volume_series.iloc[-1])
 
-            # Display 4 Metrics Cards (Price, RSI, Volume, Signal)
-            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            col_m1.metric("Live Price", f"${last_price:.2f}", f"{price_change:+.2f} ({pct_change:+.2f}%)")
-            col_m2.metric("Current RSI", f"{float(data['RSI'].iloc[-1]):.1f}")
-            col_m3.metric("Trading Volume", formatted_vol)
-            col_m4.metric("Strategy Signal", "BUY" if data['Signal'].iloc[-1] == 1 else ("SELL" if data['Signal'].iloc[-1] == -1 else "NEUTRAL"))
+        # Format Volume helper
+        def format_vol(v):
+            if v >= 1_000_000_000:
+                return f"{v / 1_000_000_000:.2f}B"
+            elif v >= 1_000_000:
+                return f"{v / 1_000_000:.2f}M"
+            elif v >= 1_000:
+                return f"{v / 1_000:.1f}K"
+            return str(int(v))
+
+        formatted_total_vol = format_vol(total_session_vol)
+        formatted_bar_vol = format_vol(last_bar_vol)
+
+        # --- UPDATE METRIC CARDS ---
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        col_m1.metric("Live Price", f"${last_price:.2f}", f"{price_change:+.2f} ({pct_change:+.2f}%)")
+        col_m2.metric("Current RSI", f"{float(data['RSI'].iloc[-1]):.1f}")
+        col_m3.metric("Session Volume", formatted_total_vol, delta=f"Last Bar: {formatted_bar_vol}")
+        col_m4.metric("Strategy Signal", "BUY" if data['Signal'].iloc[-1] == 1 else ("SELL" if data['Signal'].iloc[-1] == -1 else "NEUTRAL"))
 
         # =========================================================================
         # PLOTTING THE STRATEGY
@@ -491,11 +506,11 @@ with tab2:
         ax2.grid(True, alpha=0.3)
 
         # [Ax3: NEW VOLUME BARS PLOT]
+        # Volume Subplot displaying extended session bars
         colors = ['green' if c >= o else 'red' for c, o in zip(plot_data['Close'], plot_data['Open'])]
-        ax3.bar(plot_data.index, plot_data['Volume'], color=colors, alpha=0.6, width=0.005)
+        ax3.bar(plot_data.index, plot_data['Volume'], color=colors, alpha=0.6, width=0.003)
         ax3.set_ylabel("Volume")
         ax3.grid(True, alpha=0.3)
-
         st.pyplot(fig)
 
         # =========================================================================
