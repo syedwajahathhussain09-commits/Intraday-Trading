@@ -388,9 +388,19 @@ with tab2:
         try:
             live_ticker = yf.Ticker(ticker)
             fast = live_ticker.fast_info
+            info = live_ticker.info
             
-            # Fetch extended or regular price dynamically
-            last_price = float(fast['last_price'])
+            # Prioritize official preMarketPrice/postMarketPrice if available, else fast_info
+            pre_price = info.get('preMarketPrice')
+            post_price = info.get('postMarketPrice')
+            
+            if pre_price is not None and pre_price > 0:
+                last_price = float(pre_price)
+            elif post_price is not None and post_price > 0:
+                last_price = float(post_price)
+            else:
+                last_price = float(fast['last_price'])
+
             prev_close = float(fast['previous_close'])
             price_change = last_price - prev_close
             pct_change = (price_change / prev_close) * 100
